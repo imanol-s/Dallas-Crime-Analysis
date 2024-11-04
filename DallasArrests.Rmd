@@ -1,0 +1,61 @@
+---
+title: "DallasArrests"
+author: "Group Project"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Introduction
+This report analyzes the relationship between arrest rates and property prices in Dallas by zip code.
+Using datasets on arrests and property values, we aim to identify any correlations that may exist at the neighborhood level.
+
+
+## Data handling
+``` {r data_handling, echo=TRUE}
+library(ggplot2)
+# Load necessary libraries
+library(dplyr)
+
+# Load the data
+arrests <- read.csv("DallasArrests_cleaned.csv")
+zillow <- read.csv("Zillow-dallas.csv")
+
+# Count Arrests per Zip Code
+arrests_per_zip <- arrests %>%
+  group_by(Zipcode = Arrest.Zipcode) %>%
+  summarise(Arrest_Count = n())
+
+# Calculate Average or Median Property Prices per Zip Code
+property_price_stats <- zillow %>%
+  group_by(Zipcode = addressZipcode) %>%
+  summarise(
+    Average_Price = mean(price, na.rm = TRUE),
+    Median_Price = median(price, na.rm = TRUE)
+  )
+
+# Merge the Results
+summary_df <- merge(arrests_per_zip, property_price_stats, by = "Zipcode")
+
+# Save the Results
+print(summary_df)
+write.csv(summary_df, "Dallas_Arrests_Property_Summary.csv", row.names = FALSE)
+
+```
+
+
+
+# Data visulization
+``` {r plot, echo=TRUE}
+ggplot(summary_df, aes(x = Average_Price, y = Arrest_Count)) +
+  geom_point(color = "blue") +
+  labs(
+    title = "Arrest Counts vs. Average Property Price by Zip Code",
+    x = "Average Property Price",
+    y = "Total Arrests"
+  ) +
+  theme_minimal()
+
+```
