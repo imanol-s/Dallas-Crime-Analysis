@@ -14,3 +14,6 @@ This project analyzes the correlation between crime rates and housing prices in 
 - **R**: Data cleaning, statistical analysis, and visualization.  
 - **ggplot2**: Creating insightful visualizations.  
 - **tidyverse**: Data manipulation and transformation.  
+
+## For your convinience,
+<a href="DallasArrests.pdf"><</a>
