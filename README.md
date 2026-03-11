@@ -1,19 +1,95 @@
-# Crime & Housing Price Analysis in Dallas  
+# Dallas Crime and Housing Refresh
 
-## Overview  
-This project analyzes the correlation between crime rates and housing prices in Dallas. Using R, the dataset is cleaned, analyzed, and visualized to uncover trends. Predictive models are developed to assess how crime impacts property values. The findings are presented through detailed reports and visualizations for stakeholders.  
+This repository now contains a Python-first refresh of the original Dallas crime/housing project. The new workflow keeps the Dallas focus, but replaces the older R Markdown analysis with a reproducible data pipeline, explicit raw/processed dataset boundaries, and a small CLI.
 
-## Features  
-- **Data Cleaning**: Preprocessed crime and housing price datasets for consistency and accuracy.  
-- **Exploratory Data Analysis (EDA)**: Identified patterns and relationships between crime rates and housing prices.  
-- **Predictive Modeling**: Developed models to estimate the impact of crime on real estate prices using statistical models.  
-- **Data Visualization**: Used graphs and charts to present insights effectively.  
-- **Reporting**: Compiled results into clear and actionable reports.  
+The legacy coursework artifacts are still present in the repo for reference:
 
-## Technologies Used  
-- **R**: Data cleaning, statistical analysis, and visualization.  
-- **ggplot2**: Creating insightful visualizations.  
-- **tidyverse**: Data manipulation and transformation.  
+- `DallasArrests.Rmd`
+- `DallasArrests.pdf`
+- `DallasArrests_cleaned.csv`
+- `Dallas_Arrests_Property_Summary.csv`
+- `Police_Arrests.csv`
+- `Zillow-dallas.csv`
 
-## For your convinience,
-<a href="DallasArrests.pdf"> "DallasArrests.pdf"</a>
+## What the Python project does
+
+- Pulls official Dallas crime data from Dallas OpenData.
+- Pulls ZIP-level ACS controls from the Census API.
+- Uses Firecrawl search + scrape against Zillow ZIP market pages to collect housing values.
+- Aggregates crime to ZIP-level rates per 1,000 residents.
+- Builds a merged model dataset and runs a robust OLS regression.
+- Writes report artifacts to `reports/`.
+
+## Project layout
+
+- `src/dallas_crime/cli.py`: CLI entrypoint.
+- `src/dallas_crime/acquire/`: source acquisition helpers.
+- `src/dallas_crime/pipeline/`: build and analysis logic.
+- `tests/`: fixture-backed acquisition and pipeline tests.
+
+Runtime outputs are ignored by git:
+
+- `data/raw/`
+- `data/interim/`
+- `data/processed/`
+- `reports/`
+- `.firecrawl/`
+
+## Setup
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+```
+
+Optional configuration lives in `.env.example`. The defaults already point at:
+
+- Dallas OpenData `Police Incidents`
+- Texas ZCTA ACS 5-year data
+- Zillow ZIP home-value pages discovered through Firecrawl
+
+## Commands
+
+Show resolved config:
+
+```bash
+dallas-crime show-config
+```
+
+Dry-run acquisition:
+
+```bash
+dallas-crime acquire --dry-run
+```
+
+Fetch raw sources:
+
+```bash
+dallas-crime acquire
+```
+
+Build processed datasets:
+
+```bash
+dallas-crime build
+```
+
+Run the regression and write report outputs:
+
+```bash
+dallas-crime analyze
+```
+
+## Test
+
+```bash
+pytest
+```
+
+## Notes
+
+- Firecrawl CLI is used directly rather than an MCP integration.
+- The default crime window is the most recent 365 days, configurable via `DCA_CRIME_LOOKBACK_DAYS`.
+- Live smoke runs can be bounded with `DCA_MAX_HOUSING_ZIPS`.
+- `reports/summary.md` and the CSV/PNG outputs are generated artifacts and are intentionally ignored.

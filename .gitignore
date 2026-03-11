@@ -1,0 +1,16 @@
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.pyc
+.matplotlib/
+
+.env
+.firecrawl/
+
+data/raw/
+data/interim/
+data/processed/
+reports/
