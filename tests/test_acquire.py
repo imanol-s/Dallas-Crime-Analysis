@@ -13,12 +13,14 @@ from dallas_crime.acquire.census import (
     AcquisitionError,
     CensusRequest,
     build_census_url,
+    fetch_census_zcta_snapshot_data,
     fetch_census_zcta_data,
     normalize_census_payload,
 )
 from dallas_crime.acquire.crime import (
     DallasCrimeSourceConfig,
     build_crime_url,
+    fetch_crime_history_dataset,
     fetch_crime_dataset,
     fetch_crime_payload,
     normalize_crime_records,
@@ -39,6 +41,7 @@ from dallas_crime.acquire.housing import (
     parse_firecrawl_search_results,
     run_firecrawl_command,
 )
+from dallas_crime.acquire.sidecars import fetch_optional_zip_sidecars
 from dallas_crime.config import Settings
 
 
@@ -357,6 +360,33 @@ $259,000
             self.assertEqual(candidates.loc[0, "candidate_quality"], "low_count")
             self.assertEqual(candidates.loc[1, "candidate_quality"], "low_count")
 
+    def test_fetch_crime_history_dataset_writes_history_artifact(self):
+        payload = load_fixture("crime_payload.json")
+
+        with TemporaryDirectory() as tmp_dir:
+            settings = Settings.from_env(project_root=Path(tmp_dir))
+            settings.ensure_directories()
+
+            with patch("dallas_crime.acquire.crime.fetch_all_crime_records", return_value=payload):
+                output = fetch_crime_history_dataset(settings)
+
+            self.assertTrue(Path(output).exists())
+            self.assertEqual(Path(output).name, "crime_history_records.csv")
+            metadata_path = settings.raw_dir / "crime_history_records.metadata.json"
+            self.assertTrue(metadata_path.exists())
+            metadata = json.loads(metadata_path.read_text())
+            self.assertEqual(metadata["dataset"], "crime_history_records")
+            self.assertEqual(
+                metadata["query"]["where"],
+                settings.resolved_crime_history_where_clause(),
+            )
+            self.assertEqual(
+                metadata["query"]["lookback_days"],
+                settings.crime_history_lookback_days,
+            )
+            self.assertEqual(metadata["query"]["max_pages"], settings.crime_history_max_pages)
+            self.assertNotIn("zip_candidate_quality", metadata)
+
     def test_fetch_census_zcta_data_filters_to_crime_zip_universe(self):
         census_payload = [
             [*DEFAULT_VARIABLES, "zip code tabulation area"],
@@ -443,6 +473,54 @@ $259,000
             self.assertEqual(metadata["source_kind"], "bulk_table_based")
             self.assertTrue(metadata["fallback"]["activated"])
             self.assertIn("api timeout", metadata["fallback"]["reason"])
+
+    def test_fetch_census_zcta_snapshot_data_writes_multi_year_snapshot_artifact(self):
+        payloads_by_year = {
+            2022: [
+                [*DEFAULT_VARIABLES, "zip code tabulation area"],
+                ["12000", "98500", "4000", "2200", "1800", "1900", "11000", "1200", "75201"],
+                ["34000", "76500", "10000", "5500", "4500", "1500", "30000", "4000", "75214"],
+            ],
+            2023: [
+                [*DEFAULT_VARIABLES, "zip code tabulation area"],
+                ["12500", "99500", "4200", "2300", "1900", "1950", "11200", "1300", "75201"],
+                ["35000", "77500", "10100", "5550", "4550", "1525", "30100", "4050", "75214"],
+            ],
+        }
+
+        with TemporaryDirectory() as tmp_dir:
+            settings = Settings.from_env(project_root=Path(tmp_dir))
+            settings.ensure_directories()
+            settings.census_snapshot_years = (2022, 2023)
+            pd.DataFrame({"zip": ["75201", "75201", "75214"]}).to_csv(
+                settings.raw_dir / "crime_records.csv", index=False
+            )
+
+            def fake_fetch(request, **_kwargs):
+                return payloads_by_year[request.year]
+
+            with patch("dallas_crime.acquire.census.fetch_census_payload", side_effect=fake_fetch):
+                output = fetch_census_zcta_snapshot_data(settings)
+
+            frame = pd.read_csv(output, dtype={"zip": str})
+            self.assertEqual(frame["snapshot_year"].tolist(), [2022, 2023, 2022, 2023])
+            self.assertEqual(frame["zip"].tolist(), ["75201", "75201", "75214", "75214"])
+            owner_share = frame.loc[
+                (frame["zip"] == "75201") & (frame["snapshot_year"] == 2023),
+                "owner_occupied_share",
+            ].iloc[0]
+            self.assertAlmostEqual(
+                owner_share,
+                2300 / 4200,
+            )
+
+            metadata = json.loads(
+                (settings.raw_dir / "acs_zcta_snapshots.metadata.json").read_text()
+            )
+            self.assertEqual(metadata["snapshot_years"], [2022, 2023])
+            self.assertEqual(len(metadata["year_results"]), 2)
+            self.assertEqual(metadata["year_results"][0]["year"], 2022)
+            self.assertEqual(metadata["year_results"][1]["rows_after_zip_filter"], 2)
 
     def test_fetch_housing_dataset_writes_coverage_and_metadata(self):
         firecrawl_payload = load_fixture("firecrawl_scrape.json")
@@ -919,6 +997,94 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
 
             frame = pd.read_csv(output, dtype={"zip": str})
             self.assertEqual(frame["zip"].tolist(), ["75214"])
+
+    def test_fetch_optional_zip_sidecars_writes_all_category_artifacts(self):
+        with TemporaryDirectory() as tmp_dir:
+            settings = Settings.from_env(project_root=Path(tmp_dir))
+            settings.ensure_directories()
+
+            pd.DataFrame(
+                {
+                    "zip": ["75201", "75214"],
+                    "incident_id": ["a1", "a2"],
+                    "reported_at": ["2026-03-01", "2026-03-02"],
+                    "offense_family": ["violent", "property"],
+                }
+            ).to_csv(settings.raw_dir / "crime_records.csv", index=False)
+
+            pd.DataFrame(
+                {
+                    "zip": ["75201", "75214"],
+                    "population": [10000, 20000],
+                    "median_household_income": [95000, 78000],
+                    "occupied_housing_units": [4200, 8700],
+                    "owner_occupied_units": [2000, 4200],
+                    "renter_occupied_units": [2200, 4500],
+                    "median_gross_rent": [1900, 1650],
+                    "poverty_universe": [9800, 19500],
+                    "poverty_count": [900, 2600],
+                    "unemployment_rate": [0.045, 0.058],
+                    "vacancy_proxy": [0.075, 0.09],
+                    "educational_attainment": [0.62, 0.48],
+                    "public_assistance_share": [0.05, 0.11],
+                    "transit_commute_share": [0.14, 0.09],
+                }
+            ).to_csv(settings.raw_dir / "acs_zcta.csv", index=False)
+
+            pd.DataFrame(
+                {
+                    "zip": ["75201", "75201", "75214", "75214"],
+                    "snapshot_year": [2023, 2024, 2023, 2024],
+                    "median_household_income": [93000, 95000, 76000, 78000],
+                    "poverty_rate": [0.095, 0.092, 0.14, 0.133],
+                }
+            ).to_csv(settings.raw_dir / "acs_zcta_snapshots.csv", index=False)
+
+            pd.DataFrame(
+                {
+                    "zip": ["75201", "75214"],
+                    "home_value": [510000, 430000],
+                    "annual_change_pct": [4.2, 2.1],
+                    "median_rent": [2100, 1750],
+                    "realtor_pending_ratio": [0.62, 0.48],
+                    "realtor_median_days_on_market": [42, 56],
+                }
+            ).to_csv(settings.raw_dir / "housing_market.csv", index=False)
+
+            pd.DataFrame(
+                {
+                    "zip": ["75201", "75214"],
+                    "county_name": ["DALLAS COUNTY", "DALLAS COUNTY"],
+                    "area_score": [1.0, 1.0],
+                }
+            ).to_csv(settings.raw_dir / "zcta_county_crosswalk_2020.csv", index=False)
+
+            pd.DataFrame(
+                {
+                    "Arrest Year": [2025, 2025],
+                    "Arrest Zipcode": ["75201", "75214"],
+                    "Drug Related": ["Yes", "No"],
+                }
+            ).to_csv(settings.project_root / "Police_Arrests.csv", index=False)
+
+            artifacts = fetch_optional_zip_sidecars(settings)
+
+            economic = pd.read_csv(artifacts.economic, dtype={"zip": str})
+            real_estate = pd.read_csv(artifacts.real_estate, dtype={"zip": str})
+            law = pd.read_csv(artifacts.law_enforcement, dtype={"zip": str})
+            social = pd.read_csv(artifacts.social_services, dtype={"zip": str})
+            infra = pd.read_csv(artifacts.infrastructure, dtype={"zip": str})
+
+            self.assertEqual(economic["zip"].tolist(), ["75201", "75214"])
+            self.assertIn("economic_index", economic.columns)
+            self.assertIn("investor_purchase_share", real_estate.columns)
+            self.assertIn("law_staffing_score", law.columns)
+            self.assertIn("clinic_access_score", social.columns)
+            self.assertIn("park_access_score", infra.columns)
+
+            metadata = json.loads(Path(artifacts.metadata).read_text())
+            self.assertEqual(metadata["zip_universe_size"], 2)
+            self.assertEqual(metadata["rows_by_category"]["economic"], 2)
 
     def test_run_firecrawl_command_retries_then_succeeds(self):
         failure = subprocess.CompletedProcess(

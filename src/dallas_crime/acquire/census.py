@@ -14,7 +14,12 @@ from urllib.request import Request, urlopen
 import numpy as np
 import pandas as pd
 
-from dallas_crime.acquire.utils import AcquisitionError, run_with_retry, utc_timestamp, write_json_artifact
+from dallas_crime.acquire.utils import (
+    AcquisitionError,
+    run_with_retry,
+    utc_timestamp,
+    write_json_artifact,
+)
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -48,6 +53,21 @@ DEFAULT_VARIABLES = (
     "B17001_001E",
     "B17001_002E",
 )
+OPTIONAL_VARIABLES = (
+    "B23025_003E",
+    "B23025_005E",
+    "B25002_001E",
+    "B25002_003E",
+    "B15003_001E",
+    "B15003_022E",
+    "B15003_023E",
+    "B15003_024E",
+    "B15003_025E",
+    "B19057_001E",
+    "B19057_002E",
+    "B08301_001E",
+    "B08301_010E",
+)
 DEFAULT_RENAME_MAP = {
     "B01003_001E": "population",
     "B19013_001E": "median_household_income",
@@ -57,6 +77,21 @@ DEFAULT_RENAME_MAP = {
     "B25064_001E": "median_gross_rent",
     "B17001_001E": "poverty_universe",
     "B17001_002E": "poverty_count",
+}
+OPTIONAL_RENAME_MAP = {
+    "B23025_003E": "labor_force",
+    "B23025_005E": "unemployed_count",
+    "B25002_001E": "total_housing_units",
+    "B25002_003E": "vacant_housing_units",
+    "B15003_001E": "education_population_25_plus",
+    "B15003_022E": "education_bachelors_count",
+    "B15003_023E": "education_masters_count",
+    "B15003_024E": "education_professional_count",
+    "B15003_025E": "education_doctorate_count",
+    "B19057_001E": "households_total",
+    "B19057_002E": "households_public_assistance",
+    "B08301_001E": "total_commuters",
+    "B08301_010E": "public_transit_commuters",
 }
 
 
@@ -71,6 +106,20 @@ class CensusRequest:
     within: str | None = None
     api_key: str | None = None
     base_url: str = "https://api.census.gov/data"
+
+
+@dataclass(frozen=True)
+class CensusYearResult:
+    """Normalized ACS result for a single snapshot year."""
+
+    year: int
+    frame: pd.DataFrame
+    source_kind: str
+    source_url: str
+    rows_returned: int
+    rows_before_zip_filter: int
+    rows_after_zip_filter: int
+    fallback_reason: str | None = None
 
 
 def build_census_url(request: CensusRequest) -> str:
@@ -115,7 +164,14 @@ def fetch_census_payload(
         _read_payload,
         max_attempts=max_attempts,
         backoff_seconds=backoff_seconds,
-        retryable_exceptions=(HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError),
+        retryable_exceptions=(
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ),
         hint=(
             "Verify DCA_CENSUS_YEAR and CENSUS_API_KEY, and consider raising "
             "DCA_ACQUIRE_MAX_ATTEMPTS or DCA_ACQUIRE_TIMEOUT_SECONDS."
@@ -162,10 +218,118 @@ def fetch_census_zcta_data(settings: "Settings") -> str:
             "Could not derive ZIP universe from crime_records.csv for ACS filtering."
         )
 
-    request = CensusRequest(
+    result = fetch_census_year_data(
+        settings,
+        crime_zips=crime_zips,
         year=settings.census_year,
+    )
+
+    output_path = settings.raw_dir / "acs_zcta.csv"
+    result.frame.to_csv(output_path, index=False)
+    metadata_path = settings.raw_dir / "acs_zcta.metadata.json"
+    write_json_artifact(
+        metadata_path,
+        {
+            "dataset": "acs_zcta",
+            "retrieved_at_utc": utc_timestamp(),
+            "source_kind": result.source_kind,
+            "source_url": result.source_url,
+            "query": {
+                "year": result.year,
+                "dataset": "acs/acs5",
+                "variables": list((*DEFAULT_VARIABLES, *OPTIONAL_VARIABLES)),
+                "geography": "zip code tabulation area:*",
+                "within": None,
+                "state_fips": settings.census_state_fips,
+                "zip_filter_source": str(settings.raw_dir / "crime_records.csv"),
+            },
+            "row_counts": {
+                "rows_returned": result.rows_returned,
+                "rows_before_zip_filter": result.rows_before_zip_filter,
+                "rows_after_zip_filter": result.rows_after_zip_filter,
+                "crime_zip_universe_size": int(len(crime_zips)),
+            },
+            "fallback": {
+                "activated": result.fallback_reason is not None,
+                "reason": result.fallback_reason,
+            },
+            "output_path": str(output_path),
+        },
+    )
+    return str(output_path)
+
+
+def fetch_census_zcta_snapshot_data(settings: "Settings") -> str:
+    """Fetch multi-year ACS ZCTA snapshots and persist a stacked CSV."""
+
+    crime_zips = _load_crime_zip_universe(settings)
+    if not crime_zips:
+        raise AcquisitionError(
+            "Could not derive ZIP universe from crime_records.csv for ACS snapshot filtering."
+        )
+
+    snapshot_frames: list[pd.DataFrame] = []
+    year_results: list[dict[str, Any]] = []
+    for year in settings.census_snapshot_years:
+        result = fetch_census_year_data(
+            settings,
+            crime_zips=crime_zips,
+            year=year,
+        )
+        frame = result.frame.copy()
+        frame.insert(1, "snapshot_year", year)
+        snapshot_frames.append(frame)
+        year_results.append(
+            {
+                "year": year,
+                "source_kind": result.source_kind,
+                "source_url": result.source_url,
+                "rows_returned": result.rows_returned,
+                "rows_before_zip_filter": result.rows_before_zip_filter,
+                "rows_after_zip_filter": result.rows_after_zip_filter,
+                "fallback_activated": result.fallback_reason is not None,
+                "fallback_reason": result.fallback_reason,
+            }
+        )
+
+    if not snapshot_frames:
+        raise AcquisitionError("No ACS snapshot years were configured for acquisition.")
+
+    combined = pd.concat(snapshot_frames, ignore_index=True)
+    combined = combined.sort_values(["zip", "snapshot_year"], ignore_index=True)
+
+    output_path = settings.raw_dir / "acs_zcta_snapshots.csv"
+    combined.to_csv(output_path, index=False)
+    metadata_path = settings.raw_dir / "acs_zcta_snapshots.metadata.json"
+    write_json_artifact(
+        metadata_path,
+        {
+            "dataset": "acs_zcta_snapshots",
+            "retrieved_at_utc": utc_timestamp(),
+            "snapshot_years": list(settings.census_snapshot_years),
+            "row_counts": {
+                "rows_written": int(len(combined)),
+                "crime_zip_universe_size": int(len(crime_zips)),
+            },
+            "year_results": year_results,
+            "output_path": str(output_path),
+        },
+    )
+    return str(output_path)
+
+
+def fetch_census_year_data(
+    settings: "Settings",
+    *,
+    crime_zips: set[str],
+    year: int,
+) -> CensusYearResult:
+    """Fetch a single ACS ZCTA snapshot year and normalize it."""
+
+    request = CensusRequest(
+        year=year,
         dataset="acs/acs5",
-        variables=DEFAULT_VARIABLES,
+        variables=(*DEFAULT_VARIABLES, *OPTIONAL_VARIABLES),
         within=None,
         api_key=settings.census_api_key,
     )
@@ -181,73 +345,55 @@ def fetch_census_zcta_data(settings: "Settings") -> str:
             max_attempts=1,
             backoff_seconds=settings.acquire_backoff_seconds,
         )
-        frame = normalize_census_payload(payload, rename_map=DEFAULT_RENAME_MAP)
+        frame = normalize_census_payload(
+            payload,
+            rename_map={**DEFAULT_RENAME_MAP, **OPTIONAL_RENAME_MAP},
+        )
         if frame.empty:
             raise AcquisitionError("Census ACS payload returned no rows.")
     except AcquisitionError as exc:
         fallback_reason = str(exc)
         source_kind = "bulk_table_based"
-        source_url = _build_bulk_table_directory_url(settings.census_year)
+        source_url = _build_bulk_table_directory_url(year)
         frame = fetch_census_bulk_dataset(
             settings,
             crime_zips=crime_zips,
+            year=year,
         )
 
-    pre_filter_rows = len(frame)
+    pre_filter_rows = int(len(frame))
     frame = frame[frame["zip"].isin(crime_zips)].copy()
     if frame.empty:
         raise AcquisitionError(
-            "No ACS rows matched the crime ZIP universe. Verify Dallas crime and ACS geography settings."
+            "No ACS rows matched the crime ZIP universe. Verify Dallas crime and ACS "
+            "geography settings."
         )
 
     frame = _finalize_census_frame(frame)
-
-    output_path = settings.raw_dir / "acs_zcta.csv"
-    frame.to_csv(output_path, index=False)
-    metadata_path = settings.raw_dir / "acs_zcta.metadata.json"
-    write_json_artifact(
-        metadata_path,
-        {
-            "dataset": "acs_zcta",
-            "retrieved_at_utc": utc_timestamp(),
-            "source_kind": source_kind,
-            "source_url": source_url,
-            "query": {
-                "year": request.year,
-                "dataset": request.dataset,
-                "variables": list(request.variables),
-                "geography": request.geography,
-                "within": request.within,
-                "state_fips": settings.census_state_fips,
-                "zip_filter_source": str(settings.raw_dir / "crime_records.csv"),
-            },
-            "row_counts": {
-                "rows_returned": max(len(payload) - 1, 0) if payload is not None else int(pre_filter_rows),
-                "rows_before_zip_filter": int(pre_filter_rows),
-                "rows_after_zip_filter": int(len(frame)),
-                "crime_zip_universe_size": int(len(crime_zips)),
-            },
-            "fallback": {
-                "activated": fallback_reason is not None,
-                "reason": fallback_reason,
-            },
-            "output_path": str(output_path),
-        },
+    return CensusYearResult(
+        year=year,
+        frame=frame,
+        source_kind=source_kind,
+        source_url=source_url,
+        rows_returned=max(len(payload) - 1, 0) if payload is not None else pre_filter_rows,
+        rows_before_zip_filter=pre_filter_rows,
+        rows_after_zip_filter=int(len(frame)),
+        fallback_reason=fallback_reason,
     )
-    return str(output_path)
 
 
 def fetch_census_bulk_dataset(
     settings: "Settings",
     *,
     crime_zips: set[str],
+    year: int,
 ) -> pd.DataFrame:
     """Fetch ACS ZCTA data from official Census bulk table files."""
 
     frames: list[pd.DataFrame] = []
     for table_id, rename_map in BULK_TABLE_SPECS.items():
         frame = _fetch_bulk_table_frame(
-            year=settings.census_year,
+            year=year,
             table_id=table_id,
             rename_map=rename_map,
             target_zips=crime_zips,
@@ -316,7 +462,14 @@ def _fetch_bulk_table_frame(
         _read_table,
         max_attempts=max_attempts,
         backoff_seconds=backoff_seconds,
-        retryable_exceptions=(HTTPError, URLError, TimeoutError, OSError, csv.Error, UnicodeDecodeError),
+        retryable_exceptions=(
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            csv.Error,
+            UnicodeDecodeError,
+        ),
         hint=(
             f"Verify the official ACS bulk table path for {year} and table {table_id}: "
             f"{_build_bulk_table_directory_url(year)}"
@@ -353,10 +506,48 @@ def _finalize_census_frame(frame: pd.DataFrame) -> pd.DataFrame:
         raise AcquisitionError(f"Census ACS dataset is missing required columns: {missing}")
 
     frame = frame.copy()
+    numeric_columns = [column for column in frame.columns if column != "zip"]
+    for column in numeric_columns:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
     occupied = frame["occupied_housing_units"].replace({0: np.nan})
     poverty_universe = frame["poverty_universe"].replace({0: np.nan})
     frame["owner_occupied_share"] = frame["owner_occupied_units"] / occupied
+    frame["renter_occupied_share"] = frame["renter_occupied_units"] / occupied
     frame["poverty_rate"] = frame["poverty_count"] / poverty_universe
+
+    if {"unemployed_count", "labor_force"} <= set(frame.columns):
+        labor_force = frame["labor_force"].replace({0: np.nan})
+        frame["unemployment_rate"] = frame["unemployed_count"] / labor_force
+
+    if {"vacant_housing_units", "total_housing_units"} <= set(frame.columns):
+        housing_units = frame["total_housing_units"].replace({0: np.nan})
+        frame["vacancy_proxy"] = frame["vacant_housing_units"] / housing_units
+
+    education_parts = [
+        "education_bachelors_count",
+        "education_masters_count",
+        "education_professional_count",
+        "education_doctorate_count",
+    ]
+    if set(education_parts).issubset(frame.columns):
+        frame["bachelors_or_higher_count"] = frame[education_parts].sum(
+            axis=1,
+            min_count=1,
+        )
+    if {"bachelors_or_higher_count", "education_population_25_plus"} <= set(frame.columns):
+        education_universe = frame["education_population_25_plus"].replace({0: np.nan})
+        frame["educational_attainment"] = frame["bachelors_or_higher_count"] / education_universe
+
+    if {"households_public_assistance", "households_total"} <= set(frame.columns):
+        households_total = frame["households_total"].replace({0: np.nan})
+        frame["public_assistance_share"] = (
+            frame["households_public_assistance"] / households_total
+        )
+
+    if {"public_transit_commuters", "total_commuters"} <= set(frame.columns):
+        total_commuters = frame["total_commuters"].replace({0: np.nan})
+        frame["transit_commute_share"] = frame["public_transit_commuters"] / total_commuters
     return frame
 
 

@@ -20,6 +20,11 @@
   - `poverty_rate`
   - `owner_occupied_share`
   - `median_gross_rent`
+  - `unemployment_rate`
+  - `vacancy_proxy`
+  - `educational_attainment`
+  - `public_assistance_share`
+  - `transit_commute_share`
 
 ## `data/raw/housing_market.csv`
 
@@ -69,6 +74,56 @@
   - `price_signal_value`, `price_signal_unit`
   - Realtor monthly history columns where available
   - FHFA annual HPI columns where available
+
+## Optional Sidecar Sources
+
+## `data/raw/dfw_zip_economic_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS current/snapshot controls.
+- Key fields:
+  - `economic_index`
+  - `median_wage`
+  - `unemployment_rate`
+  - `income_growth_pct`
+  - `poverty_rate_change`
+
+## `data/raw/dfw_zip_real_estate_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from housing + ACS context.
+- Key fields:
+  - `investor_purchase_share`
+  - `real_estate_pressure`
+  - `affordability_stress`
+  - `home_value`
+  - `annual_change_pct`
+
+## `data/raw/dfw_zip_law_enforcement_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from current crime + ACS population,
+  with local arrests feed augmentation when available.
+- Key fields:
+  - `law_staffing_score`
+  - `arrest_count_3y`
+  - `arrest_rate_per_1000_3y`
+  - `drug_related_share`
+  - `violent_rate_per_1000`
+
+## `data/raw/dfw_zip_social_services_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS social indicators.
+- Key fields:
+  - `clinic_access_score`
+  - `educational_attainment`
+  - `public_assistance_share`
+
+## `data/raw/dfw_zip_infrastructure_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS transit + housing-context metrics.
+- Key fields:
+  - `park_access_score`
+  - `infrastructure_score`
+  - `transit_commute_share`
+  - `vacancy_proxy`
 
 ## Processed model dataset
 
