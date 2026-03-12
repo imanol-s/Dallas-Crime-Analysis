@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from dallas_crime.acquire.utils import AcquisitionError
 from dallas_crime.config import Settings
 
 
@@ -69,7 +70,11 @@ def acquire(
         return
 
     _echo_settings(settings)
-    result = _run_hook("dallas_crime.acquire", "run_acquire", settings)
+    try:
+        result = _run_hook("dallas_crime.acquire", "run_acquire", settings)
+    except AcquisitionError as exc:
+        typer.secho(f"Acquire failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
     if isinstance(result, dict):
         for label, path in result.items():
             typer.echo(f"{label}: {path}")

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: CLI smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          TMP_PROJECT="$(mktemp -d)"
+          python scripts/create_smoke_inputs.py "${TMP_PROJECT}"
+
+          dallas-crime show-config --project-root "${TMP_PROJECT}"
+          dallas-crime build --project-root "${TMP_PROJECT}"
+          dallas-crime analyze --project-root "${TMP_PROJECT}"

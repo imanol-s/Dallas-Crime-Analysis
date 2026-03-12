@@ -6,10 +6,13 @@ from dataclasses import dataclass
 import json
 import re
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pandas as pd
+
+from dallas_crime.acquire.utils import AcquisitionError, run_with_retry, utc_timestamp, write_json_artifact
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -120,18 +123,36 @@ def fetch_crime_payload(
     *,
     offset: int = 0,
     opener: SocrataOpener | None = None,
+    timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
+    max_attempts: int = 1,
+    backoff_seconds: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Fetch one page of JSON records from Dallas OpenData."""
 
-    request = Request(build_crime_url(config, offset=offset))
-    if opener is None:
-        response = urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS)
-    else:
-        response = opener(request)
-    payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError("Crime payload must be a JSON array of records.")
-    return payload
+    url = build_crime_url(config, offset=offset)
+
+    def _read_payload() -> list[dict[str, Any]]:
+        request = Request(url)
+        if opener is None:
+            response = urlopen(request, timeout=timeout_seconds)
+        else:
+            response = opener(request)
+        payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("Crime payload must be a JSON array of records.")
+        return payload
+
+    return run_with_retry(
+        "Dallas OpenData crime request",
+        _read_payload,
+        max_attempts=max_attempts,
+        backoff_seconds=backoff_seconds,
+        retryable_exceptions=(HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError),
+        hint=(
+            "Verify DCA_CRIME_SOURCE_URL and DCA_CRIME_WHERE, and consider raising "
+            "DCA_ACQUIRE_MAX_ATTEMPTS or DCA_ACQUIRE_TIMEOUT_SECONDS."
+        ),
+    )
 
 
 def fetch_all_crime_records(
@@ -139,16 +160,36 @@ def fetch_all_crime_records(
     *,
     opener: SocrataOpener | None = None,
     max_pages: int = 20,
+    timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
+    max_attempts: int = 1,
+    backoff_seconds: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Fetch all configured pages from the crime endpoint."""
 
     records: list[dict[str, Any]] = []
     offset = 0
-    for _ in range(max_pages):
-        payload = fetch_crime_payload(config, offset=offset, opener=opener)
+    for page_number in range(1, max_pages + 1):
+        print(
+            f"[crime] page {page_number}/{max_pages}: requesting offset {offset}.",
+            flush=True,
+        )
+        payload = fetch_crime_payload(
+            config,
+            offset=offset,
+            opener=opener,
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds,
+        )
         if not payload:
+            print(f"[crime] page {page_number}/{max_pages}: no records returned.", flush=True)
             break
         records.extend(payload)
+        print(
+            f"[crime] page {page_number}/{max_pages}: received {len(payload)} record(s); "
+            f"running total {len(records)}.",
+            flush=True,
+        )
         if len(payload) < config.limit:
             break
         offset += config.limit
@@ -192,6 +233,45 @@ def normalize_crime_records(records: Iterable[Mapping[str, Any]]) -> pd.DataFram
     )
 
 
+def _build_crime_zip_candidate_frame(
+    frame: pd.DataFrame,
+    *,
+    min_total_incidents_per_zip: int,
+) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "zip",
+                "total_incidents",
+                "first_reported_at",
+                "last_reported_at",
+                "centroid_latitude",
+                "centroid_longitude",
+                "candidate_for_housing_lookup",
+                "candidate_quality",
+            ]
+        )
+
+    candidates = (
+        frame.groupby("zip", as_index=False)
+        .agg(
+            total_incidents=("incident_id", "size"),
+            first_reported_at=("reported_at", "min"),
+            last_reported_at=("reported_at", "max"),
+            centroid_latitude=("latitude", "median"),
+            centroid_longitude=("longitude", "median"),
+        )
+        .sort_values(["total_incidents", "zip"], ascending=[False, True], ignore_index=True)
+    )
+    candidates["candidate_for_housing_lookup"] = (
+        candidates["total_incidents"] >= min_total_incidents_per_zip
+    ).astype(int)
+    candidates["candidate_quality"] = candidates["candidate_for_housing_lookup"].map(
+        {1: "eligible", 0: "low_count"}
+    )
+    return candidates
+
+
 def fetch_crime_dataset(settings: "Settings") -> str:
     """Fetch Dallas crime records and persist them as normalized CSV."""
 
@@ -200,13 +280,54 @@ def fetch_crime_dataset(settings: "Settings") -> str:
         limit=settings.crime_limit,
         where_clause=settings.resolved_crime_where_clause(),
     )
-    records = fetch_all_crime_records(config)
+    records = fetch_all_crime_records(
+        config,
+        timeout_seconds=settings.acquire_timeout_seconds,
+        max_attempts=settings.acquire_max_attempts,
+        backoff_seconds=settings.acquire_backoff_seconds,
+    )
     frame = normalize_crime_records(records)
     if frame.empty:
-        raise ValueError("Dallas crime source returned no records for the configured time window.")
+        raise AcquisitionError(
+            "Dallas OpenData returned no usable crime records for the configured window. "
+            "Adjust DCA_CRIME_WHERE or DCA_CRIME_LOOKBACK_DAYS."
+        )
 
     output_path = settings.raw_dir / "crime_records.csv"
     frame.to_csv(output_path, index=False)
+    candidate_path = settings.raw_dir / "crime_zip_candidates.csv"
+    candidate_frame = _build_crime_zip_candidate_frame(
+        frame,
+        min_total_incidents_per_zip=settings.min_total_incidents_per_zip,
+    )
+    candidate_frame.to_csv(candidate_path, index=False)
+    metadata_path = settings.raw_dir / "crime_records.metadata.json"
+    write_json_artifact(
+        metadata_path,
+        {
+            "dataset": "crime_records",
+            "retrieved_at_utc": utc_timestamp(),
+            "source_url": config.dataset_url,
+            "query": {
+                "where": config.where_clause,
+                "limit": config.limit,
+                "select": list(config.select),
+                "order_by": config.order_by,
+            },
+            "row_counts": {
+                "records_fetched": len(records),
+                "records_written": int(len(frame)),
+            },
+            "zip_candidate_quality": {
+                "minimum_incidents_per_zip": settings.min_total_incidents_per_zip,
+                "candidate_zip_count": int(len(candidate_frame)),
+                "eligible_zip_count": int(candidate_frame["candidate_for_housing_lookup"].sum()),
+                "low_count_zip_count": int((candidate_frame["candidate_for_housing_lookup"] == 0).sum()),
+                "candidate_output_path": str(candidate_path),
+            },
+            "output_path": str(output_path),
+        },
+    )
     return str(output_path)
 
 
