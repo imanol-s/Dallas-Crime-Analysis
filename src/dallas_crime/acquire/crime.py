@@ -12,7 +12,12 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from dallas_crime.acquire.utils import AcquisitionError, run_with_retry, utc_timestamp, write_json_artifact
+from dallas_crime.acquire.utils import (
+    AcquisitionError,
+    run_with_retry,
+    utc_timestamp,
+    write_json_artifact,
+)
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -81,6 +86,37 @@ _PROPERTY_KEYWORDS = (
     "PROPERTY",
 )
 
+_DFW_ZIP_MIN = 75001
+_DFW_ZIP_MAX = 75999
+
+
+def _is_dfw_zip(zip_code: str | None) -> bool:
+    """Return True if the ZIP code is within the DFW metro range (75001–75999)."""
+    if zip_code is None:
+        return False
+    try:
+        return _DFW_ZIP_MIN <= int(zip_code) <= _DFW_ZIP_MAX
+    except (ValueError, TypeError):
+        return False
+
+
+def _filter_dfw_zips(frame: pd.DataFrame) -> pd.DataFrame:
+    """Drop records whose ZIP code falls outside the DFW range and log them."""
+    if frame.empty or "zip" not in frame.columns:
+        return frame
+    dfw_mask = frame["zip"].apply(_is_dfw_zip)
+    excluded = int((~dfw_mask).sum())
+    if excluded > 0:
+        excluded_zips = sorted({z for z in frame.loc[~dfw_mask, "zip"] if z is not None})
+        sample = excluded_zips[:10]
+        suffix = " ..." if len(excluded_zips) > 10 else ""
+        print(
+            f"[crime] DFW ZIP filter: excluded {excluded} record(s) with non-DFW ZIP(s) "
+            f"({sample}{suffix}).",
+            flush=True,
+        )
+    return frame.loc[dfw_mask].reset_index(drop=True)
+
 
 @dataclass(frozen=True)
 class DallasCrimeSourceConfig:
@@ -147,7 +183,14 @@ def fetch_crime_payload(
         _read_payload,
         max_attempts=max_attempts,
         backoff_seconds=backoff_seconds,
-        retryable_exceptions=(HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError),
+        retryable_exceptions=(
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ),
         hint=(
             "Verify DCA_CRIME_SOURCE_URL and DCA_CRIME_WHERE, and consider raising "
             "DCA_ACQUIRE_MAX_ATTEMPTS or DCA_ACQUIRE_TIMEOUT_SECONDS."
@@ -275,59 +318,111 @@ def _build_crime_zip_candidate_frame(
 def fetch_crime_dataset(settings: "Settings") -> str:
     """Fetch Dallas crime records and persist them as normalized CSV."""
 
+    return _fetch_crime_dataset(
+        settings,
+        dataset_name="crime_records",
+        output_name="crime_records.csv",
+        metadata_name="crime_records.metadata.json",
+        where_clause=settings.resolved_crime_where_clause(),
+        max_pages=settings.crime_max_pages,
+        lookback_days=settings.crime_lookback_days,
+        write_zip_candidates=True,
+    )
+
+
+def fetch_crime_history_dataset(settings: "Settings") -> str:
+    """Fetch a longer-horizon Dallas crime history dataset for panel features."""
+
+    return _fetch_crime_dataset(
+        settings,
+        dataset_name="crime_history_records",
+        output_name="crime_history_records.csv",
+        metadata_name="crime_history_records.metadata.json",
+        where_clause=settings.resolved_crime_history_where_clause(),
+        max_pages=settings.crime_history_max_pages,
+        lookback_days=settings.crime_history_lookback_days,
+        write_zip_candidates=False,
+    )
+
+
+def _fetch_crime_dataset(
+    settings: "Settings",
+    *,
+    dataset_name: str,
+    output_name: str,
+    metadata_name: str,
+    where_clause: str,
+    max_pages: int,
+    lookback_days: int,
+    write_zip_candidates: bool,
+) -> str:
+    """Fetch a normalized Dallas crime dataset with configurable windowing."""
+
     config = DallasCrimeSourceConfig(
         dataset_url=settings.crime_source_url,
         limit=settings.crime_limit,
-        where_clause=settings.resolved_crime_where_clause(),
+        where_clause=where_clause,
     )
     records = fetch_all_crime_records(
         config,
+        max_pages=max_pages,
         timeout_seconds=settings.acquire_timeout_seconds,
         max_attempts=settings.acquire_max_attempts,
         backoff_seconds=settings.acquire_backoff_seconds,
     )
     frame = normalize_crime_records(records)
+    frame = _filter_dfw_zips(frame)
     if frame.empty:
         raise AcquisitionError(
             "Dallas OpenData returned no usable crime records for the configured window. "
-            "Adjust DCA_CRIME_WHERE or DCA_CRIME_LOOKBACK_DAYS."
+            "Adjust the configured crime window and retry acquisition."
         )
 
-    output_path = settings.raw_dir / "crime_records.csv"
+    output_path = settings.raw_dir / output_name
     frame.to_csv(output_path, index=False)
     candidate_path = settings.raw_dir / "crime_zip_candidates.csv"
-    candidate_frame = _build_crime_zip_candidate_frame(
-        frame,
-        min_total_incidents_per_zip=settings.min_total_incidents_per_zip,
-    )
-    candidate_frame.to_csv(candidate_path, index=False)
-    metadata_path = settings.raw_dir / "crime_records.metadata.json"
-    write_json_artifact(
-        metadata_path,
-        {
-            "dataset": "crime_records",
-            "retrieved_at_utc": utc_timestamp(),
-            "source_url": config.dataset_url,
-            "query": {
-                "where": config.where_clause,
-                "limit": config.limit,
-                "select": list(config.select),
-                "order_by": config.order_by,
-            },
-            "row_counts": {
-                "records_fetched": len(records),
-                "records_written": int(len(frame)),
-            },
-            "zip_candidate_quality": {
-                "minimum_incidents_per_zip": settings.min_total_incidents_per_zip,
-                "candidate_zip_count": int(len(candidate_frame)),
-                "eligible_zip_count": int(candidate_frame["candidate_for_housing_lookup"].sum()),
-                "low_count_zip_count": int((candidate_frame["candidate_for_housing_lookup"] == 0).sum()),
-                "candidate_output_path": str(candidate_path),
-            },
-            "output_path": str(output_path),
+    candidate_frame = pd.DataFrame()
+    if write_zip_candidates:
+        candidate_frame = _build_crime_zip_candidate_frame(
+            frame,
+            min_total_incidents_per_zip=settings.min_total_incidents_per_zip,
+        )
+        candidate_frame.to_csv(candidate_path, index=False)
+
+    page_limit_hit = len(records) >= (config.limit * max_pages)
+    metadata_path = settings.raw_dir / metadata_name
+    metadata: dict[str, Any] = {
+        "dataset": dataset_name,
+        "retrieved_at_utc": utc_timestamp(),
+        "source_url": config.dataset_url,
+        "query": {
+            "where": config.where_clause,
+            "limit": config.limit,
+            "max_pages": max_pages,
+            "lookback_days": lookback_days,
+            "select": list(config.select),
+            "order_by": config.order_by,
         },
-    )
+        "row_counts": {
+            "records_fetched": len(records),
+            "records_written": int(len(frame)),
+        },
+        "page_limit_hit": page_limit_hit,
+        "output_path": str(output_path),
+    }
+    if write_zip_candidates:
+        metadata["zip_candidate_quality"] = {
+            "minimum_incidents_per_zip": settings.min_total_incidents_per_zip,
+            "candidate_zip_count": int(len(candidate_frame)),
+            "eligible_zip_count": int(
+                candidate_frame["candidate_for_housing_lookup"].sum()
+            ),
+            "low_count_zip_count": int(
+                (candidate_frame["candidate_for_housing_lookup"] == 0).sum()
+            ),
+            "candidate_output_path": str(candidate_path),
+        }
+    write_json_artifact(metadata_path, metadata)
     return str(output_path)
 
 

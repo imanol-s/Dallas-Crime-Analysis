@@ -510,6 +510,17 @@ def _finalize_census_frame(frame: pd.DataFrame) -> pd.DataFrame:
     for column in numeric_columns:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
+    if "median_household_income" in frame.columns:
+        neg_mask = frame["median_household_income"].notna() & (frame["median_household_income"] < 0)
+        if neg_mask.any():
+            bad_zips = frame.loc[neg_mask, "zip"].tolist()
+            print(
+                f"[census] WARNING: {int(neg_mask.sum())} ZIP(s) have sentinel "
+                f"median_household_income < 0 ({bad_zips}); replacing with NaN.",
+                flush=True,
+            )
+            frame.loc[neg_mask, "median_household_income"] = np.nan
+
     occupied = frame["occupied_housing_units"].replace({0: np.nan})
     poverty_universe = frame["poverty_universe"].replace({0: np.nan})
     frame["owner_occupied_share"] = frame["owner_occupied_units"] / occupied
