@@ -608,6 +608,7 @@ def test_run_zip_regression_returns_compact_result():
                 360000,
                 378000,
             ],
+            "total_rate_per_1000": [31.2, 29.8, 28.5, 26.3, 25.6, 24.6, 23.0, 21.9, 20.3, 19.5],
             "violent_rate_per_1000": [9.2, 8.7, 8.1, 7.5, 7.1, 6.8, 6.1, 5.7, 5.2, 4.9],
             "property_rate_per_1000": [22.0, 21.1, 20.4, 19.0, 18.5, 17.8, 16.9, 16.2, 15.1, 14.6],
             "median_household_income": [
@@ -634,7 +635,7 @@ def test_run_zip_regression_returns_compact_result():
     assert result.nobs == 10
     assert result.formula.startswith("log_home_value ~")
     assert result.r_squared >= 0.0
-    assert {"Intercept", "violent_rate_per_1000", "property_rate_per_1000"} <= set(
+    assert {"Intercept", "total_rate_per_1000"} <= set(
         result.coefficients["term"]
     )
 
@@ -682,6 +683,7 @@ def test_build_vif_artifacts_notes_infinite_vif_terms():
         {
             "zip": [f"75{i:03d}" for i in range(100, 112)],
             "home_value": [260000 + (i * 12000) for i in range(12)],
+            "total_rate_per_1000": [28.3 - (i * 0.6) for i in range(12)],
             "violent_rate_per_1000": [8.8 - (i * 0.25) for i in range(12)],
             "property_rate_per_1000": [19.5 - (i * 0.35) for i in range(12)],
             "median_household_income": [58000 + (i * 2800) for i in range(12)],
@@ -1050,3 +1052,53 @@ def test_build_all_creates_processed_outputs(tmp_path: Path):
     assert qa_summary["dataset_row_counts"]["interaction_features"] == 2
     assert qa_summary["dataset_row_counts"]["housing_history_panel"] == 3
     assert qa_summary["dataset_row_counts"]["housing_history_features"] == 2
+
+
+# ── T2: Error scenario tests (pipeline side) ─────────────────────────────
+
+
+def test_aggregate_crime_data_handles_empty_dataframe():
+    empty_crime = pd.DataFrame(columns=["zip", "reported_at", "offense_family", "incident_id"])
+    empty_pop = pd.DataFrame(columns=["zip", "population"])
+    result = aggregate_crime_data(
+        empty_crime,
+        empty_pop,
+        zip_col="zip",
+        date_col="reported_at",
+        category_col="offense_family",
+    )
+    assert isinstance(result, pd.DataFrame)
+    assert "zip" in result.columns
+    assert len(result) == 0
+
+
+def test_prepare_housing_features_handles_zero_rows():
+    empty_housing = pd.DataFrame(columns=["zip", "home_value", "source"])
+    result = prepare_housing_features(empty_housing)
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 0
+
+
+def test_crime_rate_calculation_handles_zero_population():
+    import numpy as np
+
+    crime = pd.DataFrame(
+        {
+            "zip": ["75201", "75201", "75201"],
+            "reported_at": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "offense_family": ["violent", "property", "other"],
+            "incident_id": ["A1", "A2", "A3"],
+            "latitude": [32.8, 32.8, 32.8],
+            "longitude": [-96.8, -96.8, -96.8],
+        }
+    )
+    population = pd.DataFrame({"zip": ["75201"], "population": [0]})
+    result = aggregate_crime_data(
+        crime,
+        population,
+        zip_col="zip",
+        date_col="reported_at",
+        category_col="offense_family",
+    )
+    assert len(result) == 1
+    assert np.isnan(result["total_rate_per_1000"].iloc[0])

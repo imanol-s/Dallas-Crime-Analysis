@@ -124,11 +124,11 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
         assert Path(output).exists()
 
     metrics = pd.read_csv(outputs["metrics"])
-    assert set(metrics["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(metrics["model_label"]) == {"baseline", "sensitivity_check"}
     assert {"nobs", "r_squared", "adjusted_r_squared"} <= set(metrics.columns)
 
     coefficients = pd.read_csv(outputs["coefficients"])
-    assert set(coefficients["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(coefficients["model_label"]) == {"baseline", "sensitivity_check"}
     assert {
         "term",
         "estimate",
@@ -139,15 +139,15 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
     } <= set(coefficients.columns)
 
     sample_sizes = pd.read_csv(outputs["sample_sizes"])
-    assert set(sample_sizes["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(sample_sizes["model_label"]) == {"baseline", "sensitivity_check"}
     assert sample_sizes["nobs"].min() >= 8
 
     residuals = pd.read_csv(outputs["residuals"])
-    assert set(residuals["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(residuals["model_label"]) == {"baseline", "sensitivity_check"}
     assert {"observed", "fitted_value", "residual", "absolute_residual"} <= set(residuals.columns)
 
     vif = pd.read_csv(outputs["vif"])
-    assert set(vif["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(vif["model_label"]) == {"baseline", "sensitivity_check"}
     assert {"term", "vif"} <= set(vif.columns)
 
     cluster_assignments = pd.read_csv(outputs["cluster_assignments"])
@@ -199,7 +199,7 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
     }
 
     validation_metrics = pd.read_csv(outputs["validation_metrics"])
-    assert set(validation_metrics["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(validation_metrics["model_label"]) == {"baseline", "sensitivity_check"}
     assert {
         "loocv_rmse",
         "predicted_r_squared",
@@ -531,7 +531,7 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     influence_robustness = pd.read_csv(outputs["influence_robustness_diagnostics"])
     assert not influence_robustness.empty
-    assert set(influence_robustness["model_label"]) == {"baseline", "expanded_controls"}
+    assert set(influence_robustness["model_label"]) == {"baseline", "sensitivity_check"}
     assert {
         "mean_home_value_pct_delta",
         "p90_home_value_pct_delta",
@@ -591,3 +591,58 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
     assert "exploratory, non-causal" in policy_guardrails
     assert "High-confidence forecast/scenario coverage" in policy_guardrails
     assert "Lower-confidence forecast-only coverage" in policy_guardrails
+
+
+def test_drift_min_completeness_constant_exists():
+    from dallas_crime.pipeline.analyze.core import DRIFT_MIN_COMPLETENESS
+
+    assert DRIFT_MIN_COMPLETENESS == 0.33
+
+
+def test_drift_prorate_insufficient_completeness():
+    """Verify that drift scoring marks rows with insufficient completeness as sentinel."""
+    import numpy as np
+
+    from dallas_crime.pipeline.analyze.forecast import _build_drift_artifacts
+
+    periods = pd.period_range("2023Q1", periods=6, freq="Q")
+    # Build a temporal_summary with one zip that passes drift gate
+    temporal_summary = pd.DataFrame(
+        {
+            "zip": ["75100"],
+            "observed_quarters": [6],
+            "expected_quarters": [6],
+            "overall_completeness_ratio": [1.0],
+            "trailing_contiguous_quarters": [6],
+            "forecast_gate_pass": [1],
+            "drift_gate_pass": [1],
+            "first_period_start": [periods[0].start_time],
+            "latest_period_start": [periods[-1].start_time],
+        }
+    )
+    # Build temporal_series: one ZIP with 6 quarters as a DataFrame
+    series_df = pd.DataFrame(
+        {
+            "period_start": [p.start_time for p in periods],
+            "total_rate_per_1000": [30.0, 29.0, 28.0, 27.0, 26.0, 5.0],
+        }
+    )
+    temporal_series = {"75100": series_df}
+
+    # Set data_cutoff very close to the start of the latest quarter
+    # so that quarter_completeness < DRIFT_MIN_COMPLETENESS
+    latest_period_start = periods[-1].start_time
+    data_cutoff = latest_period_start + pd.Timedelta(days=1)
+
+    drift_df, _notes = _build_drift_artifacts(
+        temporal_summary,
+        temporal_series,
+        data_cutoff=data_cutoff,
+    )
+
+    # The zip-level row should exist with drift_flag = -1 (insufficient data)
+    zip_rows = drift_df[drift_df["entity_id"] == "75100"]
+    if not zip_rows.empty:
+        row = zip_rows.iloc[0]
+        assert row["drift_flag"] == -1
+        assert np.isnan(row["z_score"])
