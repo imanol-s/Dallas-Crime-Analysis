@@ -25,7 +25,13 @@ from dallas_crime.acquire.crime import (
     fetch_crime_payload,
     normalize_crime_records,
 )
+from dallas_crime.acquire.utils import (
+    AcquisitionError as UtilsAcquisitionError,
+    run_with_retry,
+    load_dfw_zip_set,
+)
 from dallas_crime.acquire.housing import (
+    extract_housing_metrics,
     FirecrawlScrapeRequest,
     FirecrawlSearchRequest,
     _load_local_realtor_history_summary,
@@ -1108,6 +1114,167 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
             )
 
         self.assertEqual(payload, {"data": []})
+
+
+    # ── T1: utils.py tests ──────────────────────────────────────────────
+
+    def test_run_with_retry_succeeds_on_first_attempt(self):
+        result = run_with_retry(
+            "test-op",
+            lambda: 42,
+            max_attempts=3,
+            backoff_seconds=0,
+            retryable_exceptions=(ValueError,),
+        )
+        self.assertEqual(result, 42)
+
+    def test_run_with_retry_retries_then_succeeds(self):
+        call_count = {"n": 0}
+
+        def flaky():
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                raise ValueError("transient")
+            return "ok"
+
+        result = run_with_retry(
+            "test-op",
+            flaky,
+            max_attempts=3,
+            backoff_seconds=0,
+            retryable_exceptions=(ValueError,),
+        )
+        self.assertEqual(result, "ok")
+        self.assertEqual(call_count["n"], 3)
+
+    def test_run_with_retry_exhausts_attempts_raises(self):
+        with self.assertRaises(UtilsAcquisitionError) as ctx:
+            run_with_retry(
+                "test-op",
+                lambda: (_ for _ in ()).throw(ValueError("fail")),
+                max_attempts=2,
+                backoff_seconds=0,
+                retryable_exceptions=(ValueError,),
+                hint="Check config.",
+            )
+        self.assertIn("2 attempt(s)", str(ctx.exception))
+        self.assertIn("Check config.", str(ctx.exception))
+
+    def test_run_with_retry_respects_exponential_backoff(self):
+        sleep_calls: list[float] = []
+
+        def always_fail():
+            raise OSError("down")
+
+        with self.assertRaises(UtilsAcquisitionError):
+            run_with_retry(
+                "test-op",
+                always_fail,
+                max_attempts=4,
+                backoff_seconds=1.0,
+                retryable_exceptions=(OSError,),
+                sleep=lambda secs: sleep_calls.append(secs),
+            )
+        self.assertEqual(sleep_calls, [1.0, 2.0, 4.0])
+
+    def test_load_dfw_zip_set_uses_cache_when_available(self):
+        with TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "crosswalk.csv"
+            cache_path.write_text(
+                "zip,county_name,area_score\n"
+                "75201,DALLAS COUNTY,100.0\n"
+                "75202,DALLAS COUNTY,90.0\n"
+                "90210,LOS ANGELES COUNTY,50.0\n"
+            )
+            result = load_dfw_zip_set(
+                ["75201", "75202", "90210"],
+                cache_path=cache_path,
+            )
+            self.assertEqual(result, {"75201", "75202"})
+
+    def test_load_dfw_zip_set_filters_to_dfw_counties(self):
+        with TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "crosswalk.csv"
+            cache_path.write_text(
+                "zip,county_name,area_score\n"
+                "75201,DALLAS COUNTY,100.0\n"
+                "76001,TARRANT COUNTY,80.0\n"
+                "77001,HARRIS COUNTY,50.0\n"
+            )
+            result = load_dfw_zip_set(
+                ["75201", "76001", "77001"],
+                cache_path=cache_path,
+            )
+            self.assertIn("75201", result)
+            self.assertIn("76001", result)
+            self.assertNotIn("77001", result)
+
+    # ── T3: extract_housing_metrics tests ─────────────────────────────
+
+    def test_extract_housing_metrics_zillow_markdown(self):
+        markdown = (
+            "# 75201 Home Values\n"
+            "The typical home value in 75201 is $350,000.\n"
+            "The average Zillow Home Value is $350,000, up 3.5% over the past year.\n"
+            "Updated on 01/15/2025"
+        )
+        result = extract_housing_metrics(
+            markdown,
+            url="https://www.zillow.com/home-values/75201/",
+        )
+        self.assertEqual(result["zip"], "75201")
+        self.assertEqual(result["source"], "zillow")
+        self.assertIsNotNone(result["home_value"])
+        self.assertAlmostEqual(result["home_value"], 350000.0, delta=1.0)
+
+    def test_extract_housing_metrics_realtor_markdown(self):
+        markdown = (
+            "| Metric | Value | Change |\n"
+            "| Median home $ | $425,000 | +2.1% |\n"
+            "| Median rent | $1,800 | +1.5% |\n"
+        )
+        result = extract_housing_metrics(
+            markdown,
+            url="https://www.realtor.com/local/market/texas/zipcode-75202",
+            zip_code="75202",
+        )
+        self.assertEqual(result["zip"], "75202")
+        self.assertEqual(result["source"], "realtor")
+
+    def test_extract_housing_metrics_malformed_input(self):
+        result = extract_housing_metrics(
+            "This is just random text with no prices or data.",
+            url=None,
+            zip_code=None,
+        )
+        self.assertIsNone(result["home_value"])
+        self.assertIsNone(result["median_rent"])
+        self.assertIsNone(result["zip"])
+
+    def test_extract_housing_metrics_missing_zip_uses_param(self):
+        result = extract_housing_metrics(
+            "Home value is $300,000",
+            url=None,
+            zip_code="75203",
+        )
+        self.assertEqual(result["zip"], "75203")
+
+    # ── T2: Error scenario tests (acquire side) ──────────────────────
+
+    def test_normalize_firecrawl_documents_handles_empty_payload(self):
+        result = normalize_firecrawl_documents({})
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertTrue(result.empty)
+
+    def test_normalize_crime_records_handles_malformed_records(self):
+        records = [
+            {"unknown_field": "value"},
+            {},
+            {"incidentnum": "123"},
+        ]
+        result = normalize_crime_records(records)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertIn("incident_id", result.columns)
 
 
 if __name__ == "__main__":

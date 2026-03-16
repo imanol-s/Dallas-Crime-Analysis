@@ -100,6 +100,13 @@ def _coerce_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
 
+def _optional_numeric(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Return a numeric series for *column*, or NaN series if missing."""
+    if column in frame.columns:
+        return _coerce_numeric(frame[column])
+    return pd.Series(np.nan, index=frame.index, dtype="float64")
+
+
 def _normalize_ratio(series: pd.Series) -> pd.Series:
     numeric = _coerce_numeric(series)
     values = np.where((numeric > 1) & (numeric <= 100), numeric / 100, numeric)
@@ -1923,41 +1930,13 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
 
     frame = model_df[["zip"]].copy()
     frame["zip"] = normalize_zip_series(frame["zip"])
-    crime_rate = (
-        _coerce_numeric(model_df["total_rate_per_1000"])
-        if "total_rate_per_1000" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    median_income = (
-        _coerce_numeric(model_df["median_household_income"])
-        if "median_household_income" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    rent_burden = (
-        _coerce_numeric(model_df["rent_burden"])
-        if "rent_burden" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    vacancy_proxy = (
-        _coerce_numeric(model_df["vacancy_proxy"])
-        if "vacancy_proxy" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    poverty_rate = (
-        _coerce_numeric(model_df["poverty_rate"])
-        if "poverty_rate" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    unemployment_rate = (
-        _coerce_numeric(model_df["unemployment_rate"])
-        if "unemployment_rate" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    pop_density = (
-        _coerce_numeric(model_df["pop_density"])
-        if "pop_density" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
+    crime_rate = _optional_numeric(model_df, "total_rate_per_1000")
+    median_income = _optional_numeric(model_df, "median_household_income")
+    rent_burden = _optional_numeric(model_df, "rent_burden")
+    vacancy_proxy = _optional_numeric(model_df, "vacancy_proxy")
+    poverty_rate = _optional_numeric(model_df, "poverty_rate")
+    unemployment_rate = _optional_numeric(model_df, "unemployment_rate")
+    pop_density = _optional_numeric(model_df, "pop_density")
     momentum = (
         _coerce_numeric(model_df["crime_history_rate_momentum_2q"])
         if "crime_history_rate_momentum_2q" in model_df.columns
@@ -1976,26 +1955,10 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
             else pd.Series(np.nan, index=model_df.index, dtype="float64")
         )
     )
-    completeness = (
-        _coerce_numeric(model_df["source_completeness_overall_score"])
-        if "source_completeness_overall_score" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    annual_change_pct = (
-        _coerce_numeric(model_df["annual_change_pct"])
-        if "annual_change_pct" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    median_rent = (
-        _coerce_numeric(model_df["median_rent"])
-        if "median_rent" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    home_value = (
-        _coerce_numeric(model_df["home_value"])
-        if "home_value" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
+    completeness = _optional_numeric(model_df, "source_completeness_overall_score")
+    annual_change_pct = _optional_numeric(model_df, "annual_change_pct")
+    median_rent = _optional_numeric(model_df, "median_rent")
+    home_value = _optional_numeric(model_df, "home_value")
 
     frame["crime_income_interaction"] = crime_rate * np.log1p(median_income.clip(lower=0))
     frame["crime_rent_burden_interaction"] = crime_rate * rent_burden
@@ -2008,16 +1971,8 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
     frame["rent_income_stress_interaction"] = rent_burden * _safe_divide(median_rent, median_income)
     frame["completeness_weighted_crime_risk"] = crime_rate * completeness
 
-    lag1_rate_hist = (
-        _coerce_numeric(model_df["crime_history_lag1_total_rate_per_1000"])
-        if "crime_history_lag1_total_rate_per_1000" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
-    lag2_rate_hist = (
-        _coerce_numeric(model_df["crime_history_lag2_total_rate_per_1000"])
-        if "crime_history_lag2_total_rate_per_1000" in model_df.columns
-        else pd.Series(np.nan, index=model_df.index, dtype="float64")
-    )
+    lag1_rate_hist = _optional_numeric(model_df, "crime_history_lag1_total_rate_per_1000")
+    lag2_rate_hist = _optional_numeric(model_df, "crime_history_lag2_total_rate_per_1000")
     frame["crime_history_lag2_trend_ratio"] = _safe_divide(lag1_rate_hist, lag2_rate_hist)
 
     distress_components = pd.concat(
@@ -2037,9 +1992,7 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
             _zscore_series(annual_change_pct),
             _zscore_series(_safe_divide(median_rent, home_value)),
             _zscore_series(
-                _coerce_numeric(model_df["acs_snapshot_median_household_income_trend_per_year"])
-                if "acs_snapshot_median_household_income_trend_per_year" in model_df.columns
-                else pd.Series(np.nan, index=model_df.index, dtype="float64")
+                _optional_numeric(model_df, "acs_snapshot_median_household_income_trend_per_year")
             ),
         ],
         axis=1,
@@ -2152,7 +2105,24 @@ def build_all(settings: "Settings") -> dict[str, str]:
         if not crime_history_panel.empty
         else pd.DataFrame()
     )
+    if crime_zip.empty:
+        raise ValueError(
+            "Crime aggregation produced no usable ZIP-level rows. "
+            "Check crime acquisition output and DCA_MIN_TOTAL_INCIDENTS_PER_ZIP."
+        )
+
     housing_zip = prepare_housing_features(housing_raw)
+    if housing_zip.empty:
+        raise ValueError(
+            "Housing preparation produced no usable rows. "
+            "Check housing acquisition output and Firecrawl configuration."
+        )
+    if controls.empty:
+        raise ValueError(
+            "Census controls produced no usable rows. "
+            "Check census acquisition output and DCA_CENSUS_YEAR."
+        )
+
     housing_history_panel = (
         prepare_housing_history_panel(housing_history_raw)
         if not housing_history_raw.empty
@@ -2219,87 +2189,31 @@ def build_all(settings: "Settings") -> dict[str, str]:
     if not interaction_features.empty:
         model_df = model_df.merge(interaction_features, on="zip", how="left")
 
+    qa_core_datasets: dict[str, pd.DataFrame] = {
+        "crime_zip": crime_zip,
+        "housing_zip": housing_zip,
+        "acs_controls": controls,
+        "model_dataset": model_df,
+    }
+    if not acs_snapshot_features.empty:
+        qa_core_datasets["acs_snapshot_features"] = acs_snapshot_features
+    if not interaction_features.empty:
+        qa_core_datasets["interaction_features"] = interaction_features
+
     duplicate_report = _build_duplicate_zip_report(
         {
             "crime_raw": crime_raw,
             "housing_raw": housing_raw,
             "census_raw": census_raw,
-            "crime_zip": crime_zip,
-            "housing_zip": housing_zip,
-            "acs_controls": controls,
-            **(
-                {"acs_snapshot_features": acs_snapshot_features}
-                if not acs_snapshot_features.empty
-                else {}
-            ),
-            **(
-                {"interaction_features": interaction_features}
-                if not interaction_features.empty
-                else {}
-            ),
-            "model_dataset": model_df,
+            **qa_core_datasets,
         }
     )
-    missingness_report = _build_missingness_report(
-        {
-            "crime_zip": crime_zip,
-            "housing_zip": housing_zip,
-            "acs_controls": controls,
-            **(
-                {"acs_snapshot_features": acs_snapshot_features}
-                if not acs_snapshot_features.empty
-                else {}
-            ),
-            **(
-                {"source_completeness_scores": source_completeness_scores}
-                if not source_completeness_scores.empty
-                else {}
-            ),
-            **(
-                {"interaction_features": interaction_features}
-                if not interaction_features.empty
-                else {}
-            ),
-            "model_dataset": model_df,
-            "target_zip_universe": target_zip_universe,
-        }
-    )
-    impossible_report = _build_impossible_values_report(
-        {
-            "crime_zip": crime_zip,
-            "housing_zip": housing_zip,
-            "acs_controls": controls,
-            **(
-                {"acs_snapshot_features": acs_snapshot_features}
-                if not acs_snapshot_features.empty
-                else {}
-            ),
-            **(
-                {"interaction_features": interaction_features}
-                if not interaction_features.empty
-                else {}
-            ),
-            "model_dataset": model_df,
-        }
-    )
-    outlier_report = _build_outlier_markers(
-        {
-            "crime_zip": crime_zip,
-            "housing_zip": housing_zip,
-            "acs_controls": controls,
-            **(
-                {"acs_snapshot_features": acs_snapshot_features}
-                if not acs_snapshot_features.empty
-                else {}
-            ),
-            **(
-                {"interaction_features": interaction_features}
-                if not interaction_features.empty
-                else {}
-            ),
-            "model_dataset": model_df,
-        }
-    )
+    missingness_datasets = {**qa_core_datasets, "target_zip_universe": target_zip_universe}
+    if not source_completeness_scores.empty:
+        missingness_datasets["source_completeness_scores"] = source_completeness_scores
+    missingness_report = _build_missingness_report(missingness_datasets)
+    impossible_report = _build_impossible_values_report(qa_core_datasets)
+    outlier_report = _build_outlier_markers(qa_core_datasets)
     qa_summary = _build_qa_summary(
         datasets={
             "crime_zip": crime_zip,

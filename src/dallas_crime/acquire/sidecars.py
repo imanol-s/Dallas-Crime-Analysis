@@ -120,7 +120,8 @@ def _build_zip_universe(
             max_attempts=settings.acquire_max_attempts,
             backoff_seconds=settings.acquire_backoff_seconds,
         )
-    except Exception:
+    except Exception as exc:
+        print(f"[sidecars] DFW crosswalk resolution failed, using prefix filter: {exc}", flush=True)
         dfw_zip_set = set()
 
     if dfw_zip_set:
