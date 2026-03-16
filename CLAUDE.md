@@ -45,24 +45,58 @@ This is a **data analytics / data science project**. Procedural and functional P
 ## Data Quality Principles
 
 All pipeline outputs must satisfy these three principles. Verify on every data refresh.
+Use the `/data-observability-gate` skill to classify and validate any data-layer change.
 
 ### Accuracy
-Values must be factually correct, with no duplicates or wrong types. Enforce:
-- No duplicate ZIPs in model_dataset.csv
-- Numeric columns contain only numeric types (no sentinel strings)
-- Crime rates ≥ 0; population > 0 for all modeled ZIPs
-- VIF < 10 for all active regression predictors
+Values must be factually correct, with no duplicates or wrong types.
+**Trigger tier:** `full` for any schema or derived-field change.
+
+| Check | Skill validation | Code guard |
+|---|---|---|
+| No duplicate ZIPs | `check_referential_integrity` (self-join) | `_dedupe_zip_rows()` in build.py |
+| Numeric types only | `check_schema` (dtype conformance) | `pd.to_numeric(errors="coerce")` in build.py |
+| Rates ≥ 0, pop > 0 | `check_statistical_bounds` (min: 0) | `np.where(pop > 0, rate, NaN)` in build.py |
+| VIF < 10 | `check_statistical_bounds` (max: 10) | `variance_inflation_factor()` in core.py |
 
 ### Completeness
-All required fields must be populated. Enforce:
-- Cell-level missingness ≤ 5% in model_dataset.csv
-- No column used in regression may exceed 30% null
-- All modeled ZIPs must have crime, housing, and census records joined
-- Source completeness scores computed and stored per ZIP
+All required fields must be populated.
+**Trigger tier:** `full` for join, filter, or null-handling changes.
+
+| Check | Skill validation | Code guard |
+|---|---|---|
+| Cell-level ≤ 5% null | `check_null_thresholds` (overall) | `warnings.warn` in `build_model_dataset()` |
+| Regression columns ≤ 30% null | `check_null_thresholds` (per-column) | `warnings.warn` in `run_zip_regression()` |
+| ZIP-level join integrity | `check_referential_integrity` | `how="inner"` on crime+housing+ACS |
+| Per-ZIP completeness scores | `check_schema` (column exists) | `build_source_completeness_scores()` |
 
 ### Timeliness
-Data must be available when downstream processes need it. Enforce:
-- Partial-quarter data pro-rated before drift scoring (floor: 0.33 completeness)
-- Quarters below 0.33 completeness excluded from drift (flag = -1)
-- Crime history lag features require ≥ 8 quarters; forecast requires ≥ 12 quarters
-- ACS snapshot features require ≥ 2 vintage years
+Data must be available when downstream processes need it.
+**Trigger tier:** `full` for filter, aggregation, or temporal logic changes.
+
+| Check | Skill validation | Code guard |
+|---|---|---|
+| Pro-rate partial quarters (floor 0.33) | `check_statistical_bounds` | `DRIFT_MIN_COMPLETENESS` in forecast.py |
+| History depth ≥ 8 quarters for lag-4 | `check_null_thresholds` (lag cols) | `crime_history_sufficient_depth` flag in build.py |
+| Forecast ≥ 12 quarters | `check_row_count` (eligible ZIPs) | `FORECAST_HISTORY_MIN_QUARTERS` in core.py |
+| ACS snapshots ≥ 2 vintages | `check_null_thresholds` (trend cols) | `len(metric_frame) >= 2` in build.py |
+
+### Validation contract: `build_model_dataset`
+
+When modifying build.py data assembly, fill out a validation contract per the
+`data-observability-gate` skill template. Key thresholds:
+
+```
+null_thresholds:
+  zip: 0.00
+  home_value: 0.05
+  total_rate_per_1000: 0.05
+  median_household_income: 0.10
+  poverty_rate: 0.10
+row_count:
+  min: 50
+  max: 100
+statistical_bounds:
+  home_value: {min: 50000, max: 2000000}
+  total_rate_per_1000: {min: 0, max: 200}
+  population: {min: 1}
+```
