@@ -96,7 +96,7 @@ row_count:
   min: 50
   max: 100
 statistical_bounds:
-  home_value: {min: 50000, max: 2000000}
-  total_rate_per_1000: {min: 0, max: 200}
+  home_value: {min: 50000, max: 3000000}       # Highland Park ZIPs reach ~$2M
+  total_rate_per_1000: {min: 0, max: 2500}     # small-pop downtown ZIPs inflate rate
   population: {min: 1}
 ```
