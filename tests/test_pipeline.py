@@ -391,6 +391,7 @@ def test_build_crime_history_features_derives_quarterly_coverage_and_trend_metri
     assert panel["zip"].tolist() == ["75201", "75201", "75201", "75202"]
     zip_75201 = result.loc[result["zip"] == "75201"].iloc[0]
     assert zip_75201["crime_history_period_count"] == 3
+    assert zip_75201["crime_history_sufficient_depth"] == 0  # 3 quarters < 8 minimum
     assert str(pd.to_datetime(zip_75201["crime_history_first_period_start"]).date()) == "2024-01-01"
     assert str(pd.to_datetime(zip_75201["crime_history_last_period_start"]).date()) == "2024-07-01"
     assert zip_75201["crime_history_latest_total_incidents"] == pytest.approx(1.0)

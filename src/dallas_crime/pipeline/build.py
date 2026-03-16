@@ -718,9 +718,12 @@ def prepare_crime_history_panel(
 def build_crime_history_features(crime_history_panel: pd.DataFrame) -> pd.DataFrame:
     """Derive per-ZIP temporal crime features from the quarterly history panel."""
 
+    _MIN_QUARTERS_FOR_LAG_FEATURES = 8
+
     columns = [
         "zip",
         "crime_history_period_count",
+        "crime_history_sufficient_depth",
         "crime_history_first_period_start",
         "crime_history_last_period_start",
         "crime_history_years_covered",
@@ -828,10 +831,17 @@ def build_crime_history_features(crime_history_panel: pd.DataFrame) -> pd.DataFr
             if pd.notna(latest_rate_value) and pd.notna(lag1_rate) and pd.notna(lag2_rate)
             else np.nan
         )
+        sufficient_depth = int(len(ordered) >= _MIN_QUARTERS_FOR_LAG_FEATURES)
+        if not sufficient_depth:
+            # NaN-out features that require deep history (lag-4 and derivatives)
+            lag4_rate = np.nan
+            latest_vs_lag4 = np.nan
+
         rows.append(
             {
                 "zip": zip_code,
                 "crime_history_period_count": int(len(ordered)),
+                "crime_history_sufficient_depth": sufficient_depth,
                 "crime_history_first_period_start": first_period,
                 "crime_history_last_period_start": last_period,
                 "crime_history_years_covered": int(last_period.year - first_period.year + 1),
@@ -965,6 +975,21 @@ def build_model_dataset(
         np.log(model_df["home_value"]),
         np.nan,
     )
+
+    # ── Completeness gate: cell-level missingness ≤ 5% ──
+    total_cells = model_df.shape[0] * model_df.shape[1]
+    if total_cells > 0:
+        missing_cells = int(model_df.isna().sum().sum())
+        missing_share = missing_cells / total_cells
+        if missing_share > 0.05:
+            import warnings
+
+            warnings.warn(
+                f"model_dataset cell-level missingness is {missing_share:.1%} "
+                f"({missing_cells}/{total_cells}), exceeding the 5% threshold. "
+                "Downstream regression results may be unreliable.",
+                stacklevel=2,
+            )
 
     return model_df.sort_values("zip", ignore_index=True)
 

@@ -202,6 +202,25 @@ def run_zip_regression(
         raise KeyError(f"model_df is missing required regression columns: {missing_list}")
 
     frame = _coerce_model_columns(frame, required_columns)
+
+    # ── Completeness gate: no regression column may exceed 30% null ──
+    _MAX_COLUMN_NULL_SHARE = 0.30
+    total_rows = len(frame)
+    if total_rows > 0:
+        high_null_cols = []
+        for col in required_columns:
+            null_share = float(frame[col].isna().sum()) / total_rows
+            if null_share > _MAX_COLUMN_NULL_SHARE:
+                high_null_cols.append(f"{col} ({null_share:.0%})")
+        if high_null_cols:
+            import warnings
+
+            warnings.warn(
+                f"Regression '{model_label}': columns exceed 30% null before row-dropping: "
+                f"{', '.join(high_null_cols)}. Coefficient estimates may be unreliable.",
+                stacklevel=2,
+            )
+
     frame = frame.dropna(subset=required_columns).copy()
 
     minimum_rows = _minimum_rows(required_columns)
