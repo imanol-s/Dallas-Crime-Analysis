@@ -10,37 +10,18 @@ import pandas as pd
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
 
-# Re-export everything from core for backward compatibility.
+# Public API re-exports.
 from dallas_crime.pipeline.analyze.core import (  # noqa: E402, F401
-    CLUSTER_MIN_SIZE_THRESHOLD,
-    CLUSTER_PRACTICAL_SILHOUETTE_THRESHOLD,
-    CLUSTER_STABILITY_ARI_THRESHOLD,
+    RegressionResult,
+    run_zip_regression,
+)
+
+# Internal imports consumed by run_analysis below — not part of the public API.
+from dallas_crime.pipeline.analyze.core import (  # noqa: E402
     DEFAULT_CONTROLS,
     DEFAULT_PREDICTORS,
-    DRIFT_HISTORY_MIN_QUARTERS,
-    DRIFT_MIN_COMPLETENESS,
-    EXPANDED_CONTROL_CANDIDATES,
-    FDR_ALPHA,
-    FEATURE_PRACTICAL_CORRELATION_THRESHOLD,
-    FEATURE_SELECTION_CANDIDATES,
-    FORECAST_HISTORY_MIN_QUARTERS,
-    FORECAST_LIMITED_HISTORY_MIN_QUARTERS,
-    FORECAST_MODEL_FALLBACK_ORDER,
-    FORECAST_MODELS,
-    INFLUENCE_P90_HOME_VALUE_DELTA_THRESHOLD,
-    REGRESSION_PRACTICAL_EFFECT_THRESHOLD_PCT,
-    SCENARIO_MULTIPLIERS,
-    SEGMENTATION_FEATURE_GROUPS,
-    SEGMENTATION_NAMES,
-    SEGMENTATION_PREPROCESSING_MODES,
-    SEGMENT_HIGH_INFLUENCE_SHARE_THRESHOLD,
-    SEGMENT_SCENARIO_COVERAGE_THRESHOLD,
-    SPATIAL_METRICS,
-    SPATIAL_PRACTICAL_EFFECT_THRESHOLD,
-    TEMPORAL_HOLDOUT_QUARTERS,
-    RegressionResult,
+    _annotate_residuals_with_influence_flags,
     _apply_regression_guardrails,
-    _bh_adjust_series,
     _build_comprehensive_validation_artifacts,
     _build_feature_power_retention_artifacts,
     _build_feature_selection_artifacts,
@@ -50,18 +31,11 @@ from dallas_crime.pipeline.analyze.core import (  # noqa: E402, F401
     _build_statistical_guardrails_artifacts,
     _build_validation_artifacts,
     _build_vif_artifacts,
-    _coerce_model_columns,
-    _ensure_dependent_column,
     _load_optional_analysis_inputs,
-    _minimum_rows,
-    _safe_ratio,
     _select_expanded_controls,
     _summarize_influence_robustness,
-    _annotate_residuals_with_influence_flags,
-    run_zip_regression,
 )
-
-from dallas_crime.pipeline.analyze.forecast import (  # noqa: E402, F401
+from dallas_crime.pipeline.analyze.forecast import (  # noqa: E402
     _build_benchmark_artifacts,
     _build_drift_artifacts,
     _build_forecast_artifacts,
@@ -69,38 +43,16 @@ from dallas_crime.pipeline.analyze.forecast import (  # noqa: E402, F401
     _build_scenario_artifacts,
     _build_temporal_holdout_artifacts,
     _build_trend_decomposition_artifacts,
-    _forecast_interval_bounds,
-    _predict_with_model,
     _prepare_temporal_analysis_inputs,
-    _select_forecast_model,
-    _walk_forward_forecast_metrics,
 )
-
-from dallas_crime.pipeline.analyze.segmentation import (  # noqa: E402, F401
-    _adjusted_rand_index,
+from dallas_crime.pipeline.analyze.segmentation import (  # noqa: E402
     _build_cluster_stability_artifacts,
     _build_segmentation_artifacts,
-    _cluster_name,
-    _comb2,
-    _deterministic_kmeans,
-    _evaluate_segmentation_solution,
-    _fit_segmentation_labels,
-    _iter_segmentation_feature_sets,
-    _prepare_segmentation_working_frame,
-    _select_segmentation_solution,
-    _silhouette_score,
-    _standardize_frame,
 )
-
-from dallas_crime.pipeline.analyze.spatial import (  # noqa: E402, F401
+from dallas_crime.pipeline.analyze.spatial import (  # noqa: E402
     _build_spatial_artifacts,
-    _inverse_distance_weights,
-    _morans_i,
 )
-
-from dallas_crime.pipeline.analyze.reporting import (  # noqa: E402, F401
-    _coefficient_for_term,
-    _effect_size_text,
+from dallas_crime.pipeline.analyze.reporting import (  # noqa: E402
     _write_benchmark_summary,
     _write_comprehensive_validation_notes,
     _write_drift_notes,
@@ -135,7 +87,6 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     target_universe = pd.read_csv(target_universe_path) if target_universe_path.exists() else pd.DataFrame()
     optional_inputs = _load_optional_analysis_inputs(settings)
     crime_history_panel = optional_inputs["crime_history_panel"]
-    _housing_history_panel = optional_inputs["housing_history_panel"]
     modeled_zips = set(pd.Series(model_df.get("zip"), dtype="string").dropna().astype(str))
     temporal_summary, temporal_series, temporal_notes = _prepare_temporal_analysis_inputs(
         crime_history_panel,

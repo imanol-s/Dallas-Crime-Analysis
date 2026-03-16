@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from dallas_crime.acquire.utils import (
+    REQUEST_TIMEOUT_SECONDS,
     AcquisitionError,
     run_with_retry,
     utc_timestamp,
@@ -25,7 +26,6 @@ if TYPE_CHECKING:
     from dallas_crime.config import Settings
 
 CensusOpener = Callable[[Request], Any]
-REQUEST_TIMEOUT_SECONDS = 30
 ZCTA_GEO_ID_PREFIX = "860Z200US"
 BULK_TABLE_BASE_URL = "https://www2.census.gov/programs-surveys/acs/summary_file"
 BULK_TABLE_SPECS = {

@@ -6,14 +6,18 @@ import pandas as pd
 import pytest
 
 from dallas_crime.config import Settings
-from dallas_crime.pipeline.analyze import (
-    _build_cluster_stability_artifacts,
+from dallas_crime.pipeline.analyze import run_zip_regression
+from dallas_crime.pipeline.analyze.core import (
+    _build_vif_artifacts,
+    _select_expanded_controls,
+)
+from dallas_crime.pipeline.analyze.forecast import (
     _build_forecast_artifacts,
     _build_temporal_holdout_artifacts,
     _prepare_temporal_analysis_inputs,
-    _build_vif_artifacts,
-    _select_expanded_controls,
-    run_zip_regression,
+)
+from dallas_crime.pipeline.analyze.segmentation import (
+    _build_cluster_stability_artifacts,
 )
 from dallas_crime.pipeline.build import (
     aggregate_crime_data,

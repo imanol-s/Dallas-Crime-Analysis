@@ -15,6 +15,8 @@ from urllib.request import Request, urlopen
 
 T = TypeVar("T")
 
+REQUEST_TIMEOUT_SECONDS = 30
+
 
 class AcquisitionError(RuntimeError):
     """Raised when a source acquisition step fails after retries."""

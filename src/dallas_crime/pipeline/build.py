@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Iterable, Mapping
 import numpy as np
 import pandas as pd
 from dallas_crime.acquire.utils import AcquisitionError, load_dfw_zip_set
+from dallas_crime.utils import _coerce_numeric, _safe_divide
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -96,10 +97,6 @@ def _coerce_dates(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
 
-def _coerce_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce")
-
-
 def _optional_numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     """Return a numeric series for *column*, or NaN series if missing."""
     if column in frame.columns:
@@ -111,13 +108,6 @@ def _normalize_ratio(series: pd.Series) -> pd.Series:
     numeric = _coerce_numeric(series)
     values = np.where((numeric > 1) & (numeric <= 100), numeric / 100, numeric)
     return pd.Series(values, index=numeric.index, dtype="float64")
-
-
-def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    numerator_num = _coerce_numeric(numerator)
-    denominator_num = _coerce_numeric(denominator)
-    values = np.where(denominator_num > 0, numerator_num / denominator_num, np.nan)
-    return pd.Series(values, index=numerator_num.index, dtype="float64")
 
 
 def _trend_slope(

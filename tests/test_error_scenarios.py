@@ -32,12 +32,14 @@ from dallas_crime.pipeline.build import (
     aggregate_crime_data,
     prepare_housing_features,
 )
-from dallas_crime.pipeline.analyze import (
-    _build_forecast_artifacts,
+from dallas_crime.pipeline.analyze import run_zip_regression
+from dallas_crime.pipeline.analyze.core import (
     _build_vif_artifacts,
-    _prepare_temporal_analysis_inputs,
     _select_expanded_controls,
-    run_zip_regression,
+)
+from dallas_crime.pipeline.analyze.forecast import (
+    _build_forecast_artifacts,
+    _prepare_temporal_analysis_inputs,
 )
 
 

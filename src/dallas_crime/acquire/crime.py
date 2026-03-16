@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from dallas_crime.acquire.utils import (
+    REQUEST_TIMEOUT_SECONDS,
     AcquisitionError,
+    _normalize_zip,
     run_with_retry,
     utc_timestamp,
     write_json_artifact,
@@ -23,7 +25,6 @@ if TYPE_CHECKING:
     from dallas_crime.config import Settings
 
 SocrataOpener = Callable[[Request], Any]
-REQUEST_TIMEOUT_SECONDS = 30
 
 _ZIP_ALIASES = (
     "zipcode",
@@ -454,15 +455,6 @@ def _extract_coordinate(record: Mapping[str, Any], aliases: tuple[str, ...]) -> 
             if key in location and location[key] not in (None, ""):
                 return location[key]
     return None
-
-
-def _normalize_zip(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    digits = re.findall(r"\d", str(value))
-    if len(digits) < 5:
-        return None
-    return "".join(digits[:5])
 
 
 def _coerce_float(value: Any) -> float | None:
