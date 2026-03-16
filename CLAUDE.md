@@ -1,6 +1,207 @@
 # CLAUDE.md
 
-Read `AGENTS.md` before making any changes — it is the authoritative guide for this repository.
+Authoritative guide for this repository. Read this before making any changes.
+
+---
+
+## Project Overview
+
+A reproducible ZIP-level crime and housing analysis pipeline for the Dallas metro area.
+Python package at `src/dallas_crime/`, exposed via the `dallas-crime` CLI.
+Stages: `acquire` → `build` → `analyze`.
+
+Runtime outputs (`data/`, `reports/`, `.firecrawl/`, `.matplotlib/`) are **untracked** — never commit them.
+
+Roadmap execution log note: `task.md` is the line-by-line tracker; read it at session start with `RUNLOG.md`.
+
+### Where Current Data Lives
+
+| What | Location | Notes |
+|------|----------|-------|
+| Raw data | `data/raw/` (59 MB) | Crime, housing, ACS, sidecars |
+| Processed datasets | `data/processed/` (2.8 MB) | `model_dataset.csv` is the primary input |
+| Source code | `src/dallas_crime/` | acquire → pipeline → analyze |
+| Analysis reports | `reports/` | Regression, forecasts, clusters, figures |
+| Quick EDA visuals | `analysis_output/` | Exploratory plots |
+| Tests | `tests/` | Unit + fixtures |
+| Scripts | `scripts/` | dq_metrics, smoke fixture gen |
+
+---
+
+## Build / Test / Lint Commands
+
+```bash
+# Environment setup (run once)
+uv venv && pip install -e ".[dev]"
+
+# Full pipeline
+make acquire       # fetch crime, ACS, housing raw data
+make build         # transform raw → model_dataset.csv
+make analyze       # run regressions → reports/
+
+# Individual CLI commands (same as make targets)
+.venv/bin/dallas-crime acquire
+.venv/bin/dallas-crime build
+.venv/bin/dallas-crime analyze
+.venv/bin/dallas-crime show-config
+
+# Tests
+make test               # runs: pytest -q
+pytest -q               # all tests
+pytest -q tests/test_pipeline.py                     # single file
+pytest -q tests/test_pipeline.py::test_normalize_zip_variants  # single test
+pytest -q -k "keyword"  # filter by name
+
+# Smoke test (no network, no API keys required)
+make smoke
+# or manually:
+TMP=$(mktemp -d)
+python scripts/create_smoke_inputs.py "$TMP"
+.venv/bin/dallas-crime build --project-root "$TMP"
+.venv/bin/dallas-crime analyze --project-root "$TMP"
+
+# Lint (ruff — configured in pyproject.toml)
+ruff check src/ tests/
+ruff format src/ tests/
+```
+
+CI runs on every push/PR: `pytest -q` then `make smoke` (see `.github/workflows/ci.yml`).
+
+---
+
+## Project Structure
+
+```
+src/dallas_crime/
+  cli.py              # Typer CLI entry point; thin dispatch only
+  config.py           # Settings dataclass; no side effects
+  acquire/
+    crime.py          # Dallas OpenData crime fetch
+    census.py         # ACS ZCTA fetch with bulk-table fallback
+    housing.py        # Multi-source housing (Zillow → Realtor → Redfin)
+    utils.py          # Shared acquisition helpers, AcquisitionError
+  pipeline/
+    build.py          # All transformations; build_all(settings) orchestrator
+    analyze.py        # Regression, VIF, plots, reports; run_analysis(settings)
+tests/
+  test_pipeline.py    # 36 unit/integration tests for build + analyze
+  test_project.py     # End-to-end run_analysis() artifact tests
+  test_acquire.py     # Acquisition layer unit tests
+scripts/
+  create_smoke_inputs.py  # Generates minimal raw CSVs for offline smoke tests
+data/raw/
+  dfw_zip_enrichment.csv  # Stable enrichment sidecar; joined in build_all()
+```
+
+---
+
+## Code Style
+
+### Python version and imports
+
+- **Requires Python ≥ 3.11**; target `py311` for ruff.
+- Every module starts with `from __future__ import annotations`.
+- Standard library imports first, then third-party (`numpy`, `pandas`, `statsmodels`, `matplotlib`), then intra-package.
+- Use `TYPE_CHECKING` guard for imports that only serve type annotations to avoid circular imports:
+  ```python
+  from typing import TYPE_CHECKING
+  if TYPE_CHECKING:
+      from dallas_crime.config import Settings
+  ```
+
+### Formatting
+
+- Line length: **100 characters** (ruff enforced).
+- Ruff is the sole formatter and linter — no Black, no isort separately.
+- Trailing commas in multi-line collections.
+
+### Type annotations
+
+- All public functions must have full parameter and return type annotations.
+- Use `tuple[str, ...]` not `Tuple[str, ...]`; use `list[str]` not `List[str]` (PEP 585).
+- `pd.DataFrame`, `pd.Series`, `Path` are preferred over `Any`.
+- `@dataclass(slots=True)` for result/payload objects (see `RegressionResult`).
+
+### Naming conventions
+
+- Modules, variables, functions: `snake_case`.
+- Private helpers: prefixed with `_` (e.g., `_coerce_model_columns`, `_write_scatter_plot`).
+- Public-facing module-level constants: `UPPER_SNAKE_CASE` (e.g., `DEFAULT_CONTROLS`, `MISSING_STRINGS`).
+- Immutable constant sets: use `frozenset` (e.g., `DEFAULT_VIOLENT_LABELS`).
+- Tuple constants preferred over list for fixed sequences of control/predictor names.
+
+### Keyword-only arguments
+
+Multi-parameter public functions must use `*` to enforce keyword-only call sites:
+```python
+def run_zip_regression(
+    model_df: pd.DataFrame,
+    *,
+    dependent: str = "log_home_value",
+    predictors: tuple[str, ...] = DEFAULT_PREDICTORS,
+    controls: tuple[str, ...] = DEFAULT_CONTROLS,
+    model_label: str = "baseline",
+) -> RegressionResult:
+```
+
+### Error handling
+
+- Raise `KeyError` for missing required DataFrame columns; include the column name(s) in the message.
+- Raise `ValueError` for invalid inputs or insufficient rows.
+- Raise `FileNotFoundError` for missing required input files.
+- Use `AcquisitionError` (from `dallas_crime.acquire.utils`) for acquisition-layer failures.
+- Numeric coercion: always use `pd.to_numeric(..., errors="coerce")` and `pd.to_datetime(..., errors="coerce")` — never raise on bad data; NaN-out instead.
+- In VIF/stats blocks, catch `(TypeError, ValueError, np.linalg.LinAlgError)` together and record a note rather than crashing.
+
+### Pandas conventions
+
+- After any dedup or sort, call `.reset_index(drop=True)`.
+- Use `np.where(condition, a, b)` for vectorized conditional assignment instead of pandas `.where()`.
+- Use `_safe_divide(numerator, denominator)` helper (defined in `build.py`) for ratio columns — avoids ZeroDivisionError.
+- Always `.copy()` a frame before mutating it (avoids `SettingWithCopyWarning`).
+- Keep I/O out of transformation functions: `build.py` helpers are pure transforms; `build_all()` does all file reads/writes.
+
+### Matplotlib
+
+- Always call `matplotlib.use("Agg")` before importing `pyplot` for headless safety.
+- Always call `plt.close(fig)` after `fig.savefig(...)`.
+- Use `os.environ.setdefault("MPLCONFIGDIR", ...)` to redirect the config dir.
+
+---
+
+## Architecture Rules
+
+- **`cli.py` is thin.** No business logic; dispatches to `build_all(settings)` and `run_analysis(settings)` only.
+- **`config.py` is pure.** `Settings` is a dataclass with no side effects; loaded once and passed down.
+- **Transformations are I/O-free.** `build.py` helpers take DataFrames and return DataFrames; `build_all()` owns all file I/O.
+- **Enrichment sidecar.** `data/raw/dfw_zip_enrichment.csv` is stable raw enrichment; `build_all()` left-joins it after `build_model_dataset()`. Idempotent — no-op if file absent. Never discard it.
+- **Expanded controls are selected dynamically.** `_select_expanded_controls()` in `analyze.py` iterates `EXPANDED_CONTROL_CANDIDATES` and accepts a candidate only if it leaves ≥ (n_columns + 1) complete rows. Do not hard-code the expanded formula.
+- **Regression uses HC3 robust standard errors.** Always `smf.ols(...).fit(cov_type="HC3")`.
+- **No secrets in source.** API keys via environment variables only (see `.env.example`).
+
+---
+
+## Testing Guidelines
+
+- Tests live in `tests/`; run with `pytest -q`.
+- Use `tmp_path` (pytest fixture) for integration tests that write files.
+- Use `unittest.mock.patch` to stub network calls in acquisition tests.
+- Always assert DataFrame shape and specific column values — do not just assert "not empty".
+- A single test can be run with: `pytest -q tests/<file>.py::<TestClass>::<test_method>` or `pytest -q tests/<file>.py::<test_function>`.
+- The smoke script (`scripts/create_smoke_inputs.py`) generates offline-safe minimal inputs; CI depends on it. Do not break its column contracts.
+
+---
+
+## Key Invariants (do not break)
+
+- `pytest -q` must pass (`36 passed, 1 warning`) before any commit.
+- `make smoke` must pass with no network access.
+- `data/raw/dfw_zip_enrichment.csv` must remain intact (70 rows, 11 enrichment columns).
+- Regression model sample sizes: baseline n=70, expanded n=61 (current; will vary after re-acquire).
+- `model_dataset.csv` columns are additive — never remove an existing column.
+- Branch: `Develpoment/1.1` (note the typo — do not rename it).
+
+---
 
 ## Parallel Code Review Pipeline
 
