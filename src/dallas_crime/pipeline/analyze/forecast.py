@@ -1459,7 +1459,7 @@ def _build_drift_artifacts(
         try:
             quarter_period = pd.Period(latest_period_ts, freq="Q")
             quarter_end = quarter_period.end_time.normalize()
-            quarter_length = max(1, (quarter_end - latest_period_ts).days)
+            quarter_length = max(1, (quarter_end - latest_period_ts).days + 1)
             days_elapsed = max(1, min((_cutoff - latest_period_ts).days + 1, quarter_length))
             quarter_completeness = days_elapsed / quarter_length
         except Exception:
