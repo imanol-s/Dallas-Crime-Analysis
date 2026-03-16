@@ -10,9 +10,7 @@ A reproducible ZIP-level crime and housing analysis pipeline for the Dallas metr
 Python package at `src/dallas_crime/`, exposed via the `dallas-crime` CLI.
 Stages: `acquire` → `build` → `analyze`.
 
-Runtime outputs (`data/`, `reports/`, `.firecrawl/`, `.matplotlib/`) are **untracked** — never commit them.
-
-Roadmap execution log note: `task.md` is the line-by-line tracker; read it at session start with `RUNLOG.md`.
+This is a **data analytics / data science project**. Procedural and functional Python is the correct style. Do not over-engineer with OOP patterns, premature abstractions, or framework migrations. Verbosity in feature engineering is acceptable when it aids readability and auditability.
 
 ### Where Current Data Lives
 
@@ -25,6 +23,19 @@ Roadmap execution log note: `task.md` is the line-by-line tracker; read it at se
 | Quick EDA visuals | `analysis_output/` | Exploratory plots |
 | Tests | `tests/` | Unit + fixtures |
 | Scripts | `scripts/` | dq_metrics, smoke fixture gen |
+| Legacy R coursework | `archive/` | Gitignored |
+
+Runtime outputs (`data/`, `reports/`, `.firecrawl/`, `.matplotlib/`) are **untracked** — never commit them.
+
+Roadmap execution log: `task.md` is the line-by-line tracker; read it at session start with `RUNLOG.md`.
+
+---
+
+## Environment
+
+- **Python ≥ 3.11**; target `py311` for ruff.
+- Always use the project venv: `uv run` or `.venv/bin/python`.
+- **No secrets in source.** API keys via environment variables only (see `.env.example`).
 
 ---
 
@@ -46,23 +57,17 @@ make analyze       # run regressions → reports/
 .venv/bin/dallas-crime show-config
 
 # Tests
-make test               # runs: pytest -q
-pytest -q               # all tests
-pytest -q tests/test_pipeline.py                     # single file
-pytest -q tests/test_pipeline.py::test_normalize_zip_variants  # single test
-pytest -q -k "keyword"  # filter by name
+uv run pytest -q                                     # all tests (84 passed, 1 warning)
+uv run pytest -q tests/test_pipeline.py              # single file
+uv run pytest -q tests/test_pipeline.py::test_normalize_zip_variants  # single test
+uv run pytest -q -k "keyword"                        # filter by name
 
 # Smoke test (no network, no API keys required)
 make smoke
-# or manually:
-TMP=$(mktemp -d)
-python scripts/create_smoke_inputs.py "$TMP"
-.venv/bin/dallas-crime build --project-root "$TMP"
-.venv/bin/dallas-crime analyze --project-root "$TMP"
 
 # Lint (ruff — configured in pyproject.toml)
-ruff check src/ tests/
-ruff format src/ tests/
+uv tool run ruff check src/ tests/
+uv tool run ruff format src/ tests/
 ```
 
 CI runs on every push/PR: `pytest -q` then `make smoke` (see `.github/workflows/ci.yml`).
@@ -82,12 +87,18 @@ src/dallas_crime/
     utils.py          # Shared acquisition helpers, AcquisitionError
   pipeline/
     build.py          # All transformations; build_all(settings) orchestrator
-    analyze.py        # Regression, VIF, plots, reports; run_analysis(settings)
+    analyze/
+      core.py         # Regression, VIF, expanded controls; run_analysis(settings)
+      forecast.py     # Crime trend forecasting, drift scoring
+      reporting.py    # Report generation, policy recommendations
+      segmentation.py # ZIP clustering, segment analysis
+      spatial.py      # Spatial analysis, neighbor effects
 tests/
-  test_pipeline.py    # 36 unit/integration tests for build + analyze
+  test_pipeline.py    # Build + analyze unit/integration tests
   test_project.py     # End-to-end run_analysis() artifact tests
   test_acquire.py     # Acquisition layer unit tests
 scripts/
+  dq_metrics.py       # Data quality metrics report
   create_smoke_inputs.py  # Generates minimal raw CSVs for offline smoke tests
 data/raw/
   dfw_zip_enrichment.csv  # Stable enrichment sidecar; joined in build_all()
@@ -95,14 +106,22 @@ data/raw/
 
 ---
 
+## Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `/dq-audit` | Full data quality audit (accuracy, completeness, timeliness, bounds, VIF) |
+| `/data-observability-gate` | Classify and validate data-layer changes before commit |
+
+---
+
 ## Code Style
 
-### Python version and imports
+### Imports
 
-- **Requires Python ≥ 3.11**; target `py311` for ruff.
 - Every module starts with `from __future__ import annotations`.
-- Standard library imports first, then third-party (`numpy`, `pandas`, `statsmodels`, `matplotlib`), then intra-package.
-- Use `TYPE_CHECKING` guard for imports that only serve type annotations to avoid circular imports:
+- Standard library first, then third-party (`numpy`, `pandas`, `statsmodels`, `matplotlib`), then intra-package.
+- Use `TYPE_CHECKING` guard for imports that only serve type annotations:
   ```python
   from typing import TYPE_CHECKING
   if TYPE_CHECKING:
@@ -175,37 +194,34 @@ def run_zip_regression(
 - **`config.py` is pure.** `Settings` is a dataclass with no side effects; loaded once and passed down.
 - **Transformations are I/O-free.** `build.py` helpers take DataFrames and return DataFrames; `build_all()` owns all file I/O.
 - **Enrichment sidecar.** `data/raw/dfw_zip_enrichment.csv` is stable raw enrichment; `build_all()` left-joins it after `build_model_dataset()`. Idempotent — no-op if file absent. Never discard it.
-- **Expanded controls are selected dynamically.** `_select_expanded_controls()` in `analyze.py` iterates `EXPANDED_CONTROL_CANDIDATES` and accepts a candidate only if it leaves ≥ (n_columns + 1) complete rows. Do not hard-code the expanded formula.
+- **Expanded controls are selected dynamically.** `_select_expanded_controls()` in `core.py` iterates `EXPANDED_CONTROL_CANDIDATES` and accepts a candidate only if it leaves ≥ (n_columns + 1) complete rows. Do not hard-code the expanded formula.
 - **Regression uses HC3 robust standard errors.** Always `smf.ols(...).fit(cov_type="HC3")`.
-- **No secrets in source.** API keys via environment variables only (see `.env.example`).
+- **Columns are additive.** Never remove an existing `model_dataset.csv` column.
 
 ---
 
 ## Testing Guidelines
 
-- Tests live in `tests/`; run with `pytest -q`.
+- Tests live in `tests/`; run with `uv run pytest -q`.
 - Use `tmp_path` (pytest fixture) for integration tests that write files.
 - Use `unittest.mock.patch` to stub network calls in acquisition tests.
 - Always assert DataFrame shape and specific column values — do not just assert "not empty".
-- A single test can be run with: `pytest -q tests/<file>.py::<TestClass>::<test_method>` or `pytest -q tests/<file>.py::<test_function>`.
 - The smoke script (`scripts/create_smoke_inputs.py`) generates offline-safe minimal inputs; CI depends on it. Do not break its column contracts.
 
 ---
 
 ## Key Invariants (do not break)
 
-- `pytest -q` must pass (`36 passed, 1 warning`) before any commit.
+- `uv run pytest -q` must pass (`84 passed, 1 warning`) before any commit.
 - `make smoke` must pass with no network access.
 - `data/raw/dfw_zip_enrichment.csv` must remain intact (70 rows, 11 enrichment columns).
 - Regression model sample sizes: baseline n=70, expanded n=61 (current; will vary after re-acquire).
-- `model_dataset.csv` columns are additive — never remove an existing column.
-- Branch: `Develpoment/1.1` (note the typo — do not rename it).
 
 ---
 
 ## Parallel Code Review Pipeline
 
-This project has three specialist agents mapped to its domain layers. When running a parallel review, use the Task tool to spawn all three concurrently.
+Three specialist agents mapped to domain layers. Spawn all three concurrently via the Task tool.
 
 ### Agent: Data Engineer
 
@@ -227,66 +243,20 @@ This project has three specialist agents mapped to its domain layers. When runni
 
 ### Orchestrator steps (after all 3 agents report green)
 
-1. Run `make smoke` — must pass with no network access.
-2. Run full `pytest -q` — must show `84 passed, 1 warning`.
-3. Run `ruff check src/ tests/` — zero errors.
+1. `make smoke` — must pass with no network access.
+2. `uv run pytest -q` — must show `84 passed, 1 warning`.
+3. `uv tool run ruff check src/ tests/` — zero errors.
 4. Commit with a summary of all agent changes.
 
-## Project Type
-
-This is a **data analytics / data science project**. Procedural and functional Python is the correct style. Do not over-engineer with OOP patterns, premature abstractions, or framework migrations. Verbosity in feature engineering is acceptable when it aids readability and auditability.
-
-## Environment
-
-- Always activate the project venv before running commands: use `uv run` or `.venv/bin/python`
-- Lint: `uv tool run ruff check src/ tests/`
-- Test: `uv run pytest -q`
-- Smoke: `make smoke`
+---
 
 ## Data Quality Principles
 
-All pipeline outputs must satisfy these three principles. Verify on every data refresh.
-Use the `/data-observability-gate` skill to classify and validate any data-layer change.
+All pipeline outputs must satisfy accuracy, completeness, and timeliness. Run `/dq-audit` to verify, or `/data-observability-gate` to classify a specific change.
 
-### Accuracy
-Values must be factually correct, with no duplicates or wrong types.
-**Trigger tier:** `full` for any schema or derived-field change.
+### Key thresholds (`build_model_dataset` validation contract)
 
-| Check | Skill validation | Code guard |
-|---|---|---|
-| No duplicate ZIPs | `check_referential_integrity` (self-join) | `_dedupe_zip_rows()` in build.py |
-| Numeric types only | `check_schema` (dtype conformance) | `pd.to_numeric(errors="coerce")` in build.py |
-| Rates ≥ 0, pop > 0 | `check_statistical_bounds` (min: 0) | `np.where(pop > 0, rate, NaN)` in build.py |
-| VIF < 10 | `check_statistical_bounds` (max: 10) | `variance_inflation_factor()` in core.py |
-
-### Completeness
-All required fields must be populated.
-**Trigger tier:** `full` for join, filter, or null-handling changes.
-
-| Check | Skill validation | Code guard |
-|---|---|---|
-| Cell-level ≤ 5% null | `check_null_thresholds` (overall) | `warnings.warn` in `build_model_dataset()` |
-| Regression columns ≤ 30% null | `check_null_thresholds` (per-column) | `warnings.warn` in `run_zip_regression()` |
-| ZIP-level join integrity | `check_referential_integrity` | `how="inner"` on crime+housing+ACS |
-| Per-ZIP completeness scores | `check_schema` (column exists) | `build_source_completeness_scores()` |
-
-### Timeliness
-Data must be available when downstream processes need it.
-**Trigger tier:** `full` for filter, aggregation, or temporal logic changes.
-
-| Check | Skill validation | Code guard |
-|---|---|---|
-| Pro-rate partial quarters (floor 0.33) | `check_statistical_bounds` | `DRIFT_MIN_COMPLETENESS` in forecast.py |
-| History depth ≥ 8 quarters for lag-4 | `check_null_thresholds` (lag cols) | `crime_history_sufficient_depth` flag in build.py |
-| Forecast ≥ 12 quarters | `check_row_count` (eligible ZIPs) | `FORECAST_HISTORY_MIN_QUARTERS` in core.py |
-| ACS snapshots ≥ 2 vintages | `check_null_thresholds` (trend cols) | `len(metric_frame) >= 2` in build.py |
-
-### Validation contract: `build_model_dataset`
-
-When modifying build.py data assembly, fill out a validation contract per the
-`data-observability-gate` skill template. Key thresholds:
-
-```
+```yaml
 null_thresholds:
   zip: 0.00
   home_value: 0.05
@@ -301,3 +271,9 @@ statistical_bounds:
   total_rate_per_1000: {min: 0, max: 2500}     # small-pop downtown ZIPs inflate rate
   population: {min: 1}
 ```
+
+### Guards summary
+
+- **Accuracy:** No duplicate ZIPs (`_dedupe_zip_rows`), numeric coercion, rates >= 0, VIF < 10.
+- **Completeness:** Cell-level <= 5% null, regression columns <= 30% null, ZIP join integrity via inner join, per-ZIP completeness scores.
+- **Timeliness:** Pro-rate partial quarters (floor 0.33), history depth >= 8 for lag-4, forecast >= 12 quarters, ACS >= 2 vintages.

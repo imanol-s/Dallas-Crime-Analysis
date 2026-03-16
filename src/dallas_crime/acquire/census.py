@@ -351,7 +351,7 @@ def fetch_census_year_data(
         )
         if frame.empty:
             raise AcquisitionError("Census ACS payload returned no rows.")
-    except AcquisitionError as exc:
+    except (AcquisitionError, KeyError) as exc:
         fallback_reason = str(exc)
         source_kind = "bulk_table_based"
         source_url = _build_bulk_table_directory_url(year)
