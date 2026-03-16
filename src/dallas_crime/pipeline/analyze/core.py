@@ -1375,8 +1375,7 @@ def _build_influence_robustness_artifacts(
         "cooks_threshold",
         "r_squared_after_exclusion",
         "r_squared_change",
-        "violent_effect_pct_change",
-        "property_effect_pct_change",
+        "crime_term_effect_pct_change",
         "mean_home_value_pct_delta",
         "p90_home_value_pct_delta",
         "max_home_value_pct_delta",
@@ -1449,8 +1448,7 @@ def _build_influence_robustness_artifacts(
                     return abs(updated - original) * 100.0
                 return abs(((updated - original) / original) * 100.0)
 
-            violent_change = _term_change_pct("violent_rate_per_1000")
-            property_change = _term_change_pct("property_rate_per_1000")
+            crime_term_change = _term_change_pct("total_rate_per_1000")
             original_predictions = np.expm1(robust_fitted.predict(reduced_frame)) + 1.0
             refit_predictions = np.expm1(refit.predict(reduced_frame)) + 1.0
             prediction_pct_delta = np.abs(
@@ -1492,8 +1490,7 @@ def _build_influence_robustness_artifacts(
                     "cooks_threshold": cooks_threshold,
                     "r_squared_after_exclusion": float(refit.rsquared),
                     "r_squared_change": r_squared_change,
-                    "violent_effect_pct_change": violent_change,
-                    "property_effect_pct_change": property_change,
+                    "crime_term_effect_pct_change": crime_term_change,
                     "mean_home_value_pct_delta": mean_prediction_delta,
                     "p90_home_value_pct_delta": p90_prediction_delta,
                     "max_home_value_pct_delta": max_prediction_delta,
@@ -1533,8 +1530,7 @@ def _summarize_influence_robustness(diagnostics: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "model_label",
         "influence_flag_count",
-        "max_violent_effect_pct_change",
-        "max_property_effect_pct_change",
+        "max_crime_term_effect_pct_change",
         "max_p90_home_value_pct_delta",
         "max_home_value_pct_delta",
         "fit_stability_pass",
@@ -1550,8 +1546,7 @@ def _summarize_influence_robustness(diagnostics: pd.DataFrame) -> pd.DataFrame:
         diagnostics.groupby("model_label", as_index=False)
         .agg(
             influence_flag_count=("removed_zip", "nunique"),
-            max_violent_effect_pct_change=("violent_effect_pct_change", "max"),
-            max_property_effect_pct_change=("property_effect_pct_change", "max"),
+            max_crime_term_effect_pct_change=("crime_term_effect_pct_change", "max"),
             max_p90_home_value_pct_delta=("p90_home_value_pct_delta", "max"),
             max_home_value_pct_delta=("max_home_value_pct_delta", "max"),
             fit_stability_pass=("fit_stability_pass", "min"),

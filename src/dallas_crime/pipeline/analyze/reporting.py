@@ -593,13 +593,8 @@ def _write_policy_guardrails(
         if not influence_summary.empty
         else 0
     )
-    max_violent_shift = (
-        float(pd.to_numeric(influence_summary["max_violent_effect_pct_change"], errors="coerce").max())
-        if not influence_summary.empty
-        else np.nan
-    )
-    max_property_shift = (
-        float(pd.to_numeric(influence_summary["max_property_effect_pct_change"], errors="coerce").max())
+    max_crime_term_shift = (
+        float(pd.to_numeric(influence_summary["max_crime_term_effect_pct_change"], errors="coerce").max())
         if not influence_summary.empty
         else np.nan
     )
@@ -650,11 +645,10 @@ def _write_policy_guardrails(
         f"- Temporal holdout pass status: {int(holdout_pass)}.",
         f"- Interval calibration pass status: {int(calibration_pass)}.",
         (
-            f"- Influence robustness severity: {influence_fail_count}/{len(influence_summary)} regression specs fail on prediction-stability guardrails; max p90 home-value delta={max_prediction_delta:.3f}%, max violent-term shift={max_violent_shift:.3f}%, max property-term shift={max_property_shift:.3f}%."
+            f"- Influence robustness severity: {influence_fail_count}/{len(influence_summary)} regression specs fail on prediction-stability guardrails; max p90 home-value delta={max_prediction_delta:.3f}%, max crime-term shift={max_crime_term_shift:.3f}%."
             if not influence_summary.empty
             and pd.notna(max_prediction_delta)
-            and pd.notna(max_violent_shift)
-            and pd.notna(max_property_shift)
+            and pd.notna(max_crime_term_shift)
             else "- Influence robustness severity: not estimable."
         ),
         f"- Influence robustness pass status: {int(influence_pass)}.",
@@ -965,32 +959,18 @@ def _write_summary_report(
     baseline = next(result for result in results if result.model_label == "baseline")
     expanded = next(result for result in results if result.model_label == "sensitivity_check")
 
-    baseline_violent = _effect_size_text(
+    baseline_crime = _effect_size_text(
         _coefficient_for_term(
             coefficients,
             model_label="baseline",
-            term="violent_rate_per_1000",
+            term="total_rate_per_1000",
         )
     )
-    baseline_property = _effect_size_text(
-        _coefficient_for_term(
-            coefficients,
-            model_label="baseline",
-            term="property_rate_per_1000",
-        )
-    )
-    expanded_violent = _effect_size_text(
+    sensitivity_crime = _effect_size_text(
         _coefficient_for_term(
             coefficients,
             model_label="sensitivity_check",
-            term="violent_rate_per_1000",
-        )
-    )
-    expanded_property = _effect_size_text(
-        _coefficient_for_term(
-            coefficients,
-            model_label="sensitivity_check",
-            term="property_rate_per_1000",
+            term="total_rate_per_1000",
         )
     )
     housing_sources = sorted(
@@ -1058,13 +1038,8 @@ def _write_summary_report(
         if not influence_summary.empty
         else 0
     )
-    max_violent_shift = (
-        float(pd.to_numeric(influence_summary["max_violent_effect_pct_change"], errors="coerce").max())
-        if not influence_summary.empty
-        else np.nan
-    )
-    max_property_shift = (
-        float(pd.to_numeric(influence_summary["max_property_effect_pct_change"], errors="coerce").max())
+    max_crime_term_shift = (
+        float(pd.to_numeric(influence_summary["max_crime_term_effect_pct_change"], errors="coerce").max())
         if not influence_summary.empty
         else np.nan
     )
@@ -1121,10 +1096,8 @@ def _write_summary_report(
         f"- Baseline sample size: {baseline.nobs} ZIPs; sensitivity-check sample size: {expanded.nobs} ZIPs.",
         f"- Overall correlation between total crime rate and home value: {total_corr_text}.",
         "- Estimated effect per +1 crime incident per 1,000 residents:",
-        f"  - Baseline violent-rate term: {baseline_violent}.",
-        f"  - Baseline property-rate term: {baseline_property}.",
-        f"  - Sensitivity-check violent-rate term: {expanded_violent}.",
-        f"  - Sensitivity-check property-rate term: {expanded_property}.",
+        f"  - Baseline total-crime-rate term: {baseline_crime}.",
+        f"  - Sensitivity-check total-crime-rate term: {sensitivity_crime}.",
         f"- Model fit stayed stable across specs (baseline R-squared: {baseline.r_squared:.3f}, "
         f"expanded R-squared: {expanded.r_squared:.3f}).",
         "",
@@ -1142,11 +1115,10 @@ def _write_summary_report(
             else "- Selected ZIP temporal holdout was not estimable for this run."
         ),
         (
-            f"- Influence robustness fails in {influence_fail_count}/{len(influence_summary)} regression specs on prediction-stability guardrails; max p90 home-value prediction delta={max_prediction_delta:.3f}%, max violent-term shift={max_violent_shift:.3f}%, max property-term shift={max_property_shift:.3f}%."
+            f"- Influence robustness fails in {influence_fail_count}/{len(influence_summary)} regression specs on prediction-stability guardrails; max p90 home-value prediction delta={max_prediction_delta:.3f}%, max crime-term shift={max_crime_term_shift:.3f}%."
             if not influence_summary.empty
             and pd.notna(max_prediction_delta)
-            and pd.notna(max_violent_shift)
-            and pd.notna(max_property_shift)
+            and pd.notna(max_crime_term_shift)
             else "- Influence robustness severity was not estimable for this run."
         ),
         f"- Fit-improvement warnings remain in {fit_warning_count}/{len(influence_summary)} regression specs."

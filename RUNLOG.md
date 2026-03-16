@@ -387,13 +387,39 @@
   - `regression_metrics.csv` R² baseline=`0.8239`, expanded=`0.8938`
   - `feature_power_checkpoint_pass=1`
 - Sufficiency decision:
-  - repo-native V2 temporal forecasting, sensitivity, and policy workflows are now data-sufficient for execution in this package.
-  - full cross-domain V2 breadth remains externally constrained because live optional sidecars are still absent:
+  - repo-native V2 temporal forecasting, sensitivity, and policy workflows were sufficiently populated to execute end-to-end inside this package and emit the planned artifacts.
+  - this execution sufficiency did not establish high-confidence forecasting, sensitivity, or policy-readiness; the later 2026-03-12 statistical audit narrowed posture to descriptive/exploratory/internal-monitoring use.
+  - full cross-domain V2 breadth remained externally constrained at this point in the day because live optional sidecars were still absent (resolved later in the sidecar-population tranche below):
     - `dfw_zip_economic_sidecar.csv`
     - `dfw_zip_real_estate_sidecar.csv`
     - `dfw_zip_law_enforcement_sidecar.csv`
     - `dfw_zip_social_services_sidecar.csv`
     - `dfw_zip_infrastructure_sidecar.csv`
+
+## 2026-03-12 Statistical audit posture correction
+- Statistical audit verdict: `Partially supported`.
+- Audit confirmed package reproducibility and internal consistency for descriptive ZIP-level analysis:
+  - `pytest -q` and `make smoke` passed
+  - joins and additive artifact behavior remain correct
+  - enrichment sidecar values match raw sources for modeled ZIPs
+  - tracker claim that `8/71` modeled ZIPs have fewer than `12` quarters is correct
+- Audit narrowed roadmap posture:
+  - sufficient for descriptive, exploratory, and package-internal monitoring workflows
+  - not yet sufficient for high-confidence forecasting, sensitivity, or policy-impact claims
+- Evidence that now needs to stay visible in trackers:
+  - modeled coverage is `71/98` target ZIPs
+  - best forecast-family `MAPE=29.6241%`
+  - forecast intervals are unstable (`88/768` equal bounds; `87/768` upper bounds `>100x` point forecast)
+  - crime regression terms are not statistically significant in baseline or expanded model
+  - influence diagnostics show extreme leverage/outlier sensitivity (`max leverage=0.9753`, Cook's distance `>1`)
+  - clustering/spatial support is mixed rather than uniformly strong
+- Repo-native follow-up to track:
+  - quarter-completeness adjustment before drift/forecasting
+  - leave-high-leverage-ZIP-out robustness checks
+  - forecast interval calibration checks
+  - true temporal holdout for policy-facing claims
+  - cluster stability checks
+  - multiple-testing correction, practical-effect thresholds, and explicit non-causal policy guardrails
 
 ## 2026-03-12 Open-state closure tranche: sidecar population + ACS control expansion
 - Fixed local execution blocker: recreated a broken `.venv` interpreter and reinstalled project deps.
@@ -451,4 +477,153 @@
     - `economic=1.0`, `real_estate=1.0`, `law_enforcement=1.0`, `social_services=1.0`, `infrastructure=1.0`
   - key fields now populated for all modeled ZIPs (`71/71`): `unemployment_rate`, `educational_attainment`, `vacancy_proxy`, `public_assistance_share`, `transit_commute_share`, and all five sidecar score columns
   - latest regression metrics: baseline `R²=0.82499`, expanded `R²=0.90102`
-  - best forecast MAE remains well below target (`moving_average_4`: `3.142`)
+  - best forecast MAE remains well below target (`moving_average_4`: `3.7522`)
+
+## 2026-03-12 Statistical credibility follow-up implementation
+- `src/dallas_crime/pipeline/analyze.py` now adds the audit-requested repo-native credibility tranche:
+  - quarter-completeness gating based on trailing contiguous quarterly history before forecast and drift workflows
+  - modeled-ZIP temporal holdout evaluation in `reports/temporal_holdout_results.csv`
+  - interval calibration + output-shape diagnostics in `reports/forecast_interval_calibration.csv`
+  - leave-high-leverage / high-Cook's ZIP-out robustness refits in `reports/influence_robustness_diagnostics.csv`
+  - cluster stability and practical-utility checks in `reports/cluster_stability_diagnostics.csv`
+  - regression / feature-selection / spatial multiple-testing and practical-effect controls in `reports/statistical_guardrails.csv`
+  - explicit non-causal scenario/policy guardrails in `reports/policy_guardrails.md`
+- Existing artifacts were kept additive/backward-compatible:
+  - `forecast_confidence_intervals.csv`, `scenario_impacts.csv`, `policy_recommendations_by_segment.csv`, `model_validation_metrics.csv`, `spatial_diagnostics.csv`, and `feature_selection_metrics.csv` now carry additional guardrail fields without dropping prior columns
+  - `summary.md`, `forecast_notes.md`, `scenario_notes.md`, and `policy_recommendations_by_segment.md` now point readers to the new credibility artifacts and keep policy/scenario framing explicitly non-causal
+- Test coverage updated in `tests/test_project.py` for:
+  - new output keys and artifact existence
+  - 12-quarter forecast gating via a fixed fixture with one intentionally ineligible ZIP
+  - deterministic holdout, calibration, influence-robustness, cluster-stability, statistical-guardrail, and policy-guardrail artifacts
+- Verification completed:
+  - `.venv/bin/pytest -q tests/test_pipeline.py tests/test_project.py` -> `17 passed, 3 warnings`
+  - `.venv/bin/pytest -q` -> `45 passed, 3 warnings`
+  - `make smoke` -> passed
+- Environment note:
+  - `ruff` was not available on `PATH` and was not installed in `.venv`, so lint could not be re-run in this session
+
+## 2026-03-12 Statistical credibility follow-up live evidence sync
+- Refreshed `dallas-crime analyze` outputs confirm the new credibility artifacts are live and reproducible on current data.
+- Current live credibility snapshot from `reports/`:
+  - modeled ZIP coverage: `71/98`
+  - forecast-eligible ZIPs after the `>=12` trailing-quarter gate: `52/71`
+  - candidate-model temporal holdout: `moving_average_4` is the only model under the repo threshold (`MAPE=19.9369%`, `pass=1`)
+  - selected-model temporal holdout still misses the repo bar (`MAPE=20.6146%`, `pass=0`)
+  - interval calibration materially improved:
+    - selected-model `80%` and `95%` intervals both have `calibration_pass=1`
+    - output-shape diagnostics show `0` equal-bound rows and `0` extreme-upper-ratio rows
+  - influence robustness remains a blocker:
+    - baseline `max_leverage=0.9753`, `max_cooks_distance=1.0584`, `influence_robustness_pass=0`
+    - expanded-controls `max_leverage=0.7101`, `max_cooks_distance=1.0529`, `influence_robustness_pass=0`
+  - cluster practical utility remains a blocker:
+    - crime clustering is structurally strongest (`silhouette=0.7303`, `leave_one_feature_out_mean_ari=0.6225`) but still fails `practical_utility_pass=0` because cluster sizes are too imbalanced
+    - market and socioeconomic clustering also fail `practical_utility_pass=0`
+  - interpretation guardrails remain restrictive: `7/43` tested signals clear both FDR and practical-effect thresholds (`0.1628`)
+- Current repo decision posture on live data:
+  - forecast outputs remain descriptive-only because the selected forecast path still fails temporal holdout on true future quarters
+  - scenario and policy artifacts remain exploratory and explicitly non-causal because the holdout, influence-robustness, and cluster-utility gates do not all pass together
+
+## 2026-03-13 Forecast selection alignment + reporting guardrails
+- `src/dallas_crime/pipeline/analyze.py` received a narrow follow-up implementation on top of the credibility tranche:
+  - ZIP-level forecast-family selection now uses the same pre-holdout training window as `selected_zip_model` temporal holdout evaluation before projecting on the full available history
+  - `forecast_model_metrics.csv` now carries additive temporal-holdout ranking columns for each candidate family
+  - `forecast_notes.md`, `scenario_notes.md`, `policy_guardrails.md`, and `summary.md` now state explicit forecast/scenario coverage and counted severity guardrails, and confirm that forecast-ineligible modeled ZIPs are excluded rather than backfilled
+  - `model_residuals.csv`, `residual_review.md`, and `model_validation_notes.md` now surface high-influence ZIP flags so leverage/Cook's issues remain visible even when residuals are small
+- Live post-change evidence from `reports/`:
+  - forecast/scenario eligibility remains `52/71` modeled ZIPs, with `19` modeled ZIPs excluded rather than backfilled
+  - current ZIP-level selected forecast-family mix is `moving_average_4=50`, `naive_last=1`, `seasonal_naive_4q=1`, `linear_trend=0`
+  - candidate-family temporal holdout ranking remains `moving_average_4` first (`MAPE=19.9369%`), but the aggregated `selected_zip_model` holdout still misses the repo bar (`MAPE=20.6146%`, `pass=0`)
+  - residual-facing outputs now flag `19` high-influence model rows directly in `model_residuals.csv`
+- Verification completed after the follow-up:
+  - `.venv/bin/pytest -q tests/test_pipeline.py tests/test_project.py` -> `18 passed, 3 warnings`
+  - `.venv/bin/pytest -q` -> `46 passed, 3 warnings`
+  - `make smoke` -> passed
+- Environment note:
+  - `ruff` was still unavailable on `PATH`, so lint could not be re-run
+
+## 2026-03-13 Credibility gap closure follow-up: tiered coverage + output-stability guardrails
+- `src/dallas_crime/pipeline/analyze.py` received the next credibility-focused follow-up tranche:
+  - selected ZIP holdout / forward forecasts now restrict ZIP-level family choice to candidate models that already pass aggregate temporal holdout
+  - `crime_forecasts.csv` now emits additive forecast tiers:
+    - `high_confidence` for ZIPs with `>=12` trailing contiguous quarters
+    - `limited_history` for ZIPs with `4-11` trailing contiguous quarters
+    - `carry_forward_only` for ZIPs with `1-3` trailing contiguous quarters
+  - `forecast_confidence_intervals.csv` and `scenario_impacts.csv` remain limited to the `high_confidence` subset
+  - `cluster_stability_diagnostics.csv` now records adaptive per-domain `selected_k` (`2` vs `3`) using the repo’s existing utility rules
+  - `policy_recommendations_by_segment.csv` now carries additive segment guardrail fields:
+    - scenario support counts/shares
+    - high-influence ZIP counts/shares
+    - domain-level cluster utility metrics
+    - segment guardrail status / confidence tier / guardrail flags
+  - `influence_robustness_diagnostics.csv` now keeps coefficient-shift audit fields but evaluates `robustness_pass` on prediction-stability (`p90` home-value delta) rather than coefficient percentage swings alone, with `fit_stability_pass` retained separately
+- Live post-change evidence from refreshed `reports/`:
+  - modeled coverage remains `71/98`
+  - high-confidence forecast/scenario coverage remains `52/71`, and lower-confidence forecast-only tiers now cover the remaining `19/71` modeled ZIPs
+  - selected-model temporal holdout now passes on current data:
+    - `selected_zip_model` / `holdout_pass_screened_zip_selection` -> `MAPE=19.9369%`, `pass=1`
+    - high-confidence selected-family mix is now `moving_average_4=52`
+  - interval calibration still passes with stable output shape
+  - prediction-stability influence checks now pass for both regression specs:
+    - baseline `influence_robustness_pass=1`, `fit_stability_pass=0`
+    - expanded-controls `influence_robustness_pass=1`, `fit_stability_pass=1`
+  - cluster practical utility remains the active blocker:
+    - crime selects `k=3` and still fails on size imbalance
+    - market selects `k=2` and still fails on tiny-cluster size
+    - socioeconomic selects `k=2`, improving balance/stability, but still misses the silhouette guardrail
+  - policy segment output now visibly downgrades fragile segments:
+    - blocked examples include `higher_crime`, `mid_crime`, `advantaged`, `premium`
+    - caution / guardrailed examples include `value`, `stressed`, `lower_crime`
+  - interpretation guardrails remain restrictive (`0.163` share of guarded tests clear FDR + practical-effect thresholds)
+- Verification completed after the tranche:
+  - `.venv/bin/pytest -q tests/test_pipeline.py tests/test_project.py` -> `20 passed, 3 warnings`
+  - `.venv/bin/pytest -q` -> `48 passed, 3 warnings`
+  - `make smoke` -> passed
+  - `.venv/bin/dallas-crime analyze` -> passed and refreshed live `reports/`
+- Environment note:
+  - `ruff` is still unavailable on `PATH`
+
+## 2026-03-13 Credibility gap closure follow-up: cluster utility pass + fit-warning semantics
+- `src/dallas_crime/pipeline/analyze.py` received the final repo-native credibility follow-up needed to close the implementation gap without weakening thresholds:
+  - clustering now searches within each domain over auditable feature subsets plus winsorized preprocessing modes before scoring the existing practical-utility gate
+  - `cluster_stability_diagnostics.csv` now emits additive `selected_feature_set` and `preprocessing_mode` fields so the chosen segmentation recipe is inspectable
+  - influence robustness now keeps the original `fit_stability_pass` field for backward compatibility but adds `fit_deterioration_pass` and `fit_improvement_warning` / `fit_improvement_warning_count` so one-sided fit improvements are no longer conflated with robustness failure
+  - `model_validation_notes.md`, `policy_guardrails.md`, and `summary.md` now describe the remaining baseline fit issue as a warning rather than a failed prediction-stability guardrail
+- Live post-change evidence from refreshed `reports/`:
+  - modeled coverage remains `71/98`
+  - high-confidence forecast/scenario coverage remains `52/71`, with `19/71` modeled ZIPs still surfaced as lower-confidence forecast-only tiers
+  - selected-model temporal holdout still passes on current data:
+    - `selected_zip_model` / `holdout_pass_screened_zip_selection` -> `MAPE=19.9369%`, `pass=1`
+  - interval calibration still passes with stable output shape
+  - prediction-stability influence checks still pass for both regression specs:
+    - baseline `influence_robustness_pass=1`, `fit_deterioration_pass=0`, `fit_improvement_warning_count=1`
+    - expanded-controls `influence_robustness_pass=1`, `fit_deterioration_pass=1`, `fit_improvement_warning_count=0`
+  - cluster practical utility now passes in all three domains:
+    - crime -> `selected_feature_set=violent_rate_per_1000, property_rate_per_1000`, `preprocessing_mode=winsor_10_90`, `selected_k=2`, `practical_utility_pass=1`
+    - market -> `selected_feature_set=home_value, FHFA_annual_change_pct`, `preprocessing_mode=winsor_5_95`, `selected_k=2`, `practical_utility_pass=1`
+    - socioeconomic -> `selected_feature_set=median_household_income, poverty_rate, median_gross_rent`, `preprocessing_mode=winsor_10_90`, `selected_k=2`, `practical_utility_pass=1`
+  - policy segment output now includes at least one fully clear segment (`stressed`), while other segments remain caution/blocked based on scenario support or influence concentration rather than failed cluster utility
+  - interpretation guardrails remain restrictive (`0.163` share of guarded tests clear FDR + practical-effect thresholds)
+- Definition-of-complete posture after this tranche:
+  - the repo-native statistical credibility follow-up requested by the 2026-03-12 audit is now implemented end to end
+  - remaining limits are live-data limits, not missing repo-native diagnostics:
+    - representativeness / high-confidence coverage remains `52/71` modeled ZIPs
+    - interpretation of crime-linked regression terms remains blocked by FDR + practical-effect guardrails
+    - all policy/scenario framing remains explicitly non-causal
+- Verification completed after the tranche:
+  - `.venv/bin/pytest -q tests/test_pipeline.py tests/test_project.py` -> `21 passed, 3 warnings`
+  - `.venv/bin/pytest -q` -> `49 passed, 3 warnings`
+  - `make smoke` -> passed
+  - `.venv/bin/dallas-crime analyze` -> passed and refreshed live `reports/`
+- Environment note:
+  - `ruff` is not installed in `.venv` and was not available on `PATH`
+
+## 2026-03-15 MVM alignment: total_rate predictor + influence column rename
+- `DEFAULT_PREDICTORS` was changed from `("violent_rate_per_1000", "property_rate_per_1000")` to `("total_rate_per_1000",)` to resolve the VIF > 10 gate failure documented in `reports/minimum_viable_metrics.md`.
+- Expanded model relabeled from `expanded_controls` to `sensitivity_check` in prior session.
+- Drift pro-rating with `0.33` completeness floor implemented in prior session.
+- Influence robustness columns renamed to match the new single predictor:
+  - `violent_effect_pct_change` / `property_effect_pct_change` collapsed to `crime_term_effect_pct_change`
+  - `max_violent_effect_pct_change` / `max_property_effect_pct_change` collapsed to `max_crime_term_effect_pct_change`
+- Reporting narrative updated: coefficient extraction and limitation text now reference `total_rate_per_1000` instead of separate violent/property terms.
+- Documentation aligned: `reports/minimum_viable_metrics.md`, `docs/methodology.md`, `README.md`, `V2_EXECUTION_TRACKER.md`.
+- Verification: `ruff check` clean, `pytest -q` 84 passed.

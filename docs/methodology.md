@@ -8,9 +8,8 @@
 - Modeled-universe rule: ZIPs must also have valid ACS controls; zero-population and sentinel ACS
   rows are excluded upstream rather than carried forward as missing model rows.
 - Outcome: `log_home_value` (natural log of ZIP-level home value).
-- Core exposure variables:
-  - `violent_rate_per_1000`
-  - `property_rate_per_1000`
+- Core exposure variable:
+  - `total_rate_per_1000`
 - Baseline controls:
   - `median_household_income`
   - `poverty_rate`
@@ -70,7 +69,7 @@
 Two robust OLS specifications are estimated from the same processed dataset:
 
 1. Baseline model (`baseline` label): crime rates + baseline controls.
-2. Expanded controls model (`expanded_controls` label): baseline model plus selected additional
+2. Sensitivity-check model (`sensitivity_check` label): baseline model plus selected additional
    controls that pass completeness checks.
 
 Both models use HC3 robust standard errors.

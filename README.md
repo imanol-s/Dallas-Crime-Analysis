@@ -33,7 +33,7 @@ All production refreshes should use the Python CLI commands below.
 - Excludes ZIPs with fewer than `DCA_MIN_TOTAL_INCIDENTS_PER_ZIP` incidents in the active crime window to avoid singleton garbage matches in the study universe.
 - Runs two robust regression model specifications from the same processed dataset:
   - baseline model
-  - expanded-controls model
+  - sensitivity-check model
 - Exports feature-selection diagnostics, predictive model-family selection artifacts,
   12-month crime forecasts with confidence intervals, stress scenarios, benchmark and drift diagnostics,
   policy recommendations by segment, and narrative summary artifacts.

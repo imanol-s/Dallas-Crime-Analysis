@@ -271,8 +271,7 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
         for row in influence_summary.itertuples(index=False):
             validation_notes.append(
                 f"- `{row.model_label}`: {int(row.influence_flag_count)} high-influence ZIPs were flagged; "
-                f"max violent-term shift={float(row.max_violent_effect_pct_change):.3f}%, "
-                f"max property-term shift={float(row.max_property_effect_pct_change):.3f}%, "
+                f"max crime-term shift={float(row.max_crime_term_effect_pct_change):.3f}%, "
                 f"max p90 home-value prediction delta={float(row.max_p90_home_value_pct_delta):.3f}%, "
                 f"fit_deterioration_pass={int(row.fit_deterioration_pass)}, "
                 f"fit_improvement_warning_count={int(row.fit_improvement_warning_count)}, "
@@ -281,8 +280,7 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     else:
         for column in (
             "influence_flag_count",
-            "max_violent_effect_pct_change",
-            "max_property_effect_pct_change",
+            "max_crime_term_effect_pct_change",
             "max_p90_home_value_pct_delta",
             "max_home_value_pct_delta",
             "fit_stability_pass",
