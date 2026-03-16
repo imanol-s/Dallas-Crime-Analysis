@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "data": {
+    "web": [
+      {
+        "url": "https://www.zillow.com/home-values/75214/",
+        "description": "The average 75214 home value is $898,055, up 4.4% over the past year.",
+        "markdown": "# 75214 Housing Market\n\n## $898,055\n\nThe average 75214 home value is $898,055, up 4.4% over the past year. (Updated on 1/31/2026)\n\n### 75214 Rental Market Trends\n\n**Average Rent: $2,450** (January 31, 2026)\n"
+      }
+    ]
+  }
+}

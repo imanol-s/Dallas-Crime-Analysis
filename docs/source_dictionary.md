@@ -1,0 +1,173 @@
+# Source Dictionary
+
+## Raw sources
+
+## `data/raw/crime_records.csv`
+
+- Origin: Dallas OpenData Police Incidents endpoint.
+- Key fields used downstream:
+  - `reported_at`: incident timestamp.
+  - `offense_family`: normalized category (`violent`, `property`, `other`).
+  - `zip`: incident ZIP code.
+
+## `data/raw/acs_zcta.csv`
+
+- Origin: U.S. Census ACS 5-year ZIP Code Tabulation Area data.
+- Key fields used downstream:
+  - `zip`
+  - `population`
+  - `median_household_income`
+  - `poverty_rate`
+  - `owner_occupied_share`
+  - `median_gross_rent`
+  - `unemployment_rate`
+  - `vacancy_proxy`
+  - `educational_attainment`
+  - `public_assistance_share`
+  - `transit_commute_share`
+
+## `data/raw/housing_market.csv`
+
+- Origin: Firecrawl-assisted extraction from a prioritized mix of public ZIP market pages,
+  plus structured Realtor ZIP inventory feeds for broader coverage and recent-trend features.
+- URL patterns:
+  - Zillow: `https://www.zillow.com/home-values/`
+  - Realtor.com: `https://www.realtor.com/local/market/texas/zipcode-{zip}`
+  - Realtor ZIP current feed: `https://econdata.s3-us-west-2.amazonaws.com/Reports/Core/RDC_Inventory_Core_Metrics_Zip.csv`
+  - Realtor ZIP history feed: `https://econdata.s3-us-west-2.amazonaws.com/Reports/Core/RDC_Inventory_Core_Metrics_Zip_History.csv`
+  - Redfin: `https://www.redfin.com/zipcode/{zip}/housing-market`
+- Key fields used downstream:
+  - `zip`
+  - `home_value`
+  - `as_of_date`
+  - `annual_change_pct`
+  - `median_rent`
+  - `source`
+  - `source_url`
+  - `metric_label`
+  - `supplemental_sources`
+  - `realtor_listing_price`
+  - `realtor_active_listing_count`
+  - `realtor_median_days_on_market`
+  - `realtor_pending_ratio`
+  - `realtor_hist_listing_price_12m_avg`
+  - `realtor_hist_listing_price_12m_change`
+  - `realtor_hist_active_listing_count_12m_avg`
+  - `realtor_hist_median_days_on_market_12m_avg`
+  - `realtor_hist_pending_ratio_12m_avg`
+
+## `data/raw/housing_market_history.csv`
+
+- Origin: combined historical housing panel built from:
+  - Realtor ZIP monthly history for recent market observations
+  - official FHFA ZIP5 annual HPI for year-2000 backfill
+- Coverage target:
+  - years `2000` through `2025`
+- URL patterns:
+  - Realtor ZIP history feed: `https://econdata.s3-us-west-2.amazonaws.com/Reports/Core/RDC_Inventory_Core_Metrics_Zip_History.csv`
+  - FHFA ZIP5 annual HPI: `https://www.fhfa.gov/hpi/download/annual/hpi_at_zip5.xlsx`
+- Key fields:
+  - `zip`
+  - `period_start`, `period_end`, `period_year`, `period_month`
+  - `frequency`
+  - `source`, `source_url`, `metric_label`
+  - `price_signal_value`, `price_signal_unit`
+  - Realtor monthly history columns where available
+  - FHFA annual HPI columns where available
+
+## Optional Sidecar Sources
+
+## `data/raw/dfw_zip_economic_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS current/snapshot controls.
+- Key fields:
+  - `economic_index`
+  - `median_wage`
+  - `unemployment_rate`
+  - `income_growth_pct`
+  - `poverty_rate_change`
+
+## `data/raw/dfw_zip_real_estate_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from housing + ACS context.
+- Key fields:
+  - `investor_purchase_share`
+  - `real_estate_pressure`
+  - `affordability_stress`
+  - `home_value`
+  - `annual_change_pct`
+
+## `data/raw/dfw_zip_law_enforcement_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from current crime + ACS population,
+  with local arrests feed augmentation when available.
+- Key fields:
+  - `law_staffing_score`
+  - `arrest_count_3y`
+  - `arrest_rate_per_1000_3y`
+  - `drug_related_share`
+  - `violent_rate_per_1000`
+
+## `data/raw/dfw_zip_social_services_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS social indicators.
+- Key fields:
+  - `clinic_access_score`
+  - `educational_attainment`
+  - `public_assistance_share`
+
+## `data/raw/dfw_zip_infrastructure_sidecar.csv`
+
+- Origin: generated during `dallas-crime acquire` from ACS transit + housing-context metrics.
+- Key fields:
+  - `park_access_score`
+  - `infrastructure_score`
+  - `transit_commute_share`
+  - `vacancy_proxy`
+
+## Processed model dataset
+
+## `data/processed/model_dataset.csv`
+
+Key analysis columns:
+
+- Geography and period:
+  - `zip`, `period_start`, `period_end`, `centroid_latitude`, `centroid_longitude`
+- Crime volume and rates:
+  - `total_incidents`, `violent_incidents`, `property_incidents`, `other_incidents`
+  - `total_rate_per_1000`, `violent_rate_per_1000`, `property_rate_per_1000`
+- Housing:
+  - `home_value`, `log_home_value`, `as_of_date`, `annual_change_pct`, `median_rent`
+- ACS controls:
+  - `population_acs`, `median_household_income`, `poverty_rate`,
+    `owner_occupied_share`, `median_gross_rent`
+- Source metadata:
+  - `source`, `source_url`
+  - `metric_label`, `supplemental_sources`
+
+## `data/processed/housing_history_panel.csv`
+
+Key analysis columns:
+
+- `zip`
+- `period_start`, `period_end`, `period_year`, `period_month`
+- `frequency`
+- `source`, `source_url`, `metric_label`
+- `price_signal_value`, `price_signal_unit`
+- `realtor_hist_listing_price`
+- `realtor_hist_active_listing_count`
+- `realtor_hist_median_days_on_market`
+- `realtor_hist_pending_ratio`
+- `fhfa_annual_change_pct`
+- `fhfa_hpi`, `fhfa_hpi_1990_base`, `fhfa_hpi_2000_base`
+
+## Notes
+
+- `population` may appear from the crime-rate merge and `population_acs` from ACS controls.
+- `centroid_latitude` and `centroid_longitude` are median incident coordinates by ZIP from the
+  current crime acquisition window and are used only for geography-aware reporting.
+- `home_value` is a harmonized housing price signal, not a single-source measure:
+  Zillow contributes typical home value, Realtor.com contributes median home price,
+  Realtor's structured ZIP feed contributes median listing price when page-level sources
+  are unavailable, and Redfin contributes median sale price as the last fallback.
+- All numeric fields are coerced to numeric during build and/or analysis steps.

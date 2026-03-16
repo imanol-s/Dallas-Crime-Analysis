@@ -1,0 +1,22 @@
+[
+  {
+    "incidentnum": "12345",
+    "date1": "2025-01-15T03:30:00.000Z",
+    "offincident": "AGGRAVATED ASSAULT",
+    "zip_code": "75201",
+    "geocoded_column": {
+      "latitude": "32.7811",
+      "longitude": "-96.7989"
+    }
+  },
+  {
+    "incidentnum": "67890",
+    "date1": "2025-01-16T11:00:00.000Z",
+    "offincident": "BURGLARY OF HABITATION",
+    "zip_code": "75214",
+    "geocoded_column": {
+      "latitude": "32.8142",
+      "longitude": "-96.7485"
+    }
+  }
+]
