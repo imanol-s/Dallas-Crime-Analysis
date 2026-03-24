@@ -415,9 +415,7 @@ def _fetch_crime_dataset(
         metadata["zip_candidate_quality"] = {
             "minimum_incidents_per_zip": settings.min_total_incidents_per_zip,
             "candidate_zip_count": int(len(candidate_frame)),
-            "eligible_zip_count": int(
-                candidate_frame["candidate_for_housing_lookup"].sum()
-            ),
+            "eligible_zip_count": int(candidate_frame["candidate_for_housing_lookup"].sum()),
             "low_count_zip_count": int(
                 (candidate_frame["candidate_for_housing_lookup"] == 0).sum()
             ),

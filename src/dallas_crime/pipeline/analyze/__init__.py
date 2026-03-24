@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import statsmodels.formula.api as smf
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -22,7 +23,9 @@ from dallas_crime.pipeline.analyze.core import (  # noqa: E402
     DEFAULT_PREDICTORS,
     _annotate_residuals_with_influence_flags,
     _apply_regression_guardrails,
+    _audit_baseline_controls,
     _build_comprehensive_validation_artifacts,
+    _build_factor_importance_artifacts,
     _build_feature_power_retention_artifacts,
     _build_feature_selection_artifacts,
     _build_influence_robustness_artifacts,
@@ -51,6 +54,7 @@ from dallas_crime.pipeline.analyze.segmentation import (  # noqa: E402
 )
 from dallas_crime.pipeline.analyze.spatial import (  # noqa: E402
     _build_spatial_artifacts,
+    _fit_spatial_lag_model,
 )
 from dallas_crime.pipeline.analyze.reporting import (  # noqa: E402
     _write_benchmark_summary,
@@ -84,7 +88,9 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
 
     model_df = pd.read_csv(model_path)
     target_universe_path = settings.processed_dir / "target_zip_universe.csv"
-    target_universe = pd.read_csv(target_universe_path) if target_universe_path.exists() else pd.DataFrame()
+    target_universe = (
+        pd.read_csv(target_universe_path) if target_universe_path.exists() else pd.DataFrame()
+    )
     optional_inputs = _load_optional_analysis_inputs(settings)
     crime_history_panel = optional_inputs["crime_history_panel"]
     modeled_zips = set(pd.Series(model_df.get("zip"), dtype="string").dropna().astype(str))
@@ -99,12 +105,69 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
         controls=DEFAULT_CONTROLS,
         model_label="baseline",
     )
-    expanded_controls = _select_expanded_controls(
+    # R5: impute FHFA_annual_change_pct for missing ZIPs before expanded control selection.
+    # Uses Zillow-derived annual_change_pct as proxy if correlation >= 0.7, else median.
+    if "FHFA_annual_change_pct" in model_df.columns and "annual_change_pct" in model_df.columns:
+        _fhfa_missing_mask = pd.to_numeric(
+            model_df["FHFA_annual_change_pct"], errors="coerce"
+        ).isna()
+        _fhfa_missing_count = int(_fhfa_missing_mask.sum())
+        if _fhfa_missing_count > 0:
+            model_df = model_df.copy()
+            model_df["FHFA_annual_change_pct"] = pd.to_numeric(
+                model_df["FHFA_annual_change_pct"], errors="coerce"
+            )
+            model_df["annual_change_pct"] = pd.to_numeric(
+                model_df["annual_change_pct"], errors="coerce"
+            )
+            model_df["FHFA_annual_change_pct_imputed"] = False
+            _complete_mask = (
+                model_df["FHFA_annual_change_pct"].notna() & model_df["annual_change_pct"].notna()
+            )
+            if _complete_mask.sum() >= 3:
+                _proxy_corr = float(
+                    model_df.loc[_complete_mask, "FHFA_annual_change_pct"].corr(
+                        model_df.loc[_complete_mask, "annual_change_pct"]
+                    )
+                )
+                if _proxy_corr >= 0.7:
+                    try:
+                        _proxy_fit = smf.ols(
+                            "FHFA_annual_change_pct ~ annual_change_pct",
+                            data=model_df.loc[_complete_mask],
+                        ).fit()
+                        model_df.loc[_fhfa_missing_mask, "FHFA_annual_change_pct"] = (
+                            _proxy_fit.predict(model_df.loc[_fhfa_missing_mask])
+                        )
+                        _impute_method = f"OLS proxy via annual_change_pct (r={_proxy_corr:.3f})"
+                    except Exception:
+                        _median_val = float(
+                            model_df.loc[_complete_mask, "FHFA_annual_change_pct"].median()
+                        )
+                        model_df.loc[_fhfa_missing_mask, "FHFA_annual_change_pct"] = _median_val
+                        _impute_method = "median (OLS proxy fit failed)"
+                else:
+                    _median_val = float(
+                        model_df.loc[_complete_mask, "FHFA_annual_change_pct"].median()
+                    )
+                    model_df.loc[_fhfa_missing_mask, "FHFA_annual_change_pct"] = _median_val
+                    _impute_method = f"median (proxy correlation {_proxy_corr:.3f} < 0.7)"
+                model_df.loc[_fhfa_missing_mask, "FHFA_annual_change_pct_imputed"] = True
+                print(
+                    f"[analyze] NOTE (R5): imputed {_fhfa_missing_count} missing "
+                    f"FHFA_annual_change_pct value(s) using {_impute_method}.",
+                    flush=True,
+                )
+
+    expanded_controls, _expanded_selection_notes = _select_expanded_controls(
         model_df,
         dependent="log_home_value",
         predictors=DEFAULT_PREDICTORS,
         baseline_controls=DEFAULT_CONTROLS,
     )
+    if _expanded_selection_notes:
+        for _note in _expanded_selection_notes:
+            print(f"[analyze] VIF-gate: {_note}", flush=True)
     expanded_result = run_zip_regression(
         model_df,
         predictors=DEFAULT_PREDICTORS,
@@ -112,6 +175,89 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
         model_label="sensitivity_check",
     )
     results = [baseline_result, expanded_result]
+
+    # R2: population-weighted variant (guards against missing / all-null population_acs)
+    _pop_col = "population_acs"
+    if (
+        _pop_col in model_df.columns
+        and pd.to_numeric(model_df[_pop_col], errors="coerce").notna().any()
+    ):
+        popweighted_result = run_zip_regression(
+            model_df,
+            predictors=DEFAULT_PREDICTORS,
+            controls=DEFAULT_CONTROLS,
+            model_label="baseline_popweighted",
+            weights_column=_pop_col,
+        )
+        results.append(popweighted_result)
+    else:
+        print(
+            f"[analyze] NOTE (R2): '{_pop_col}' is missing or all-null; "
+            "population-weighted model skipped.",
+            flush=True,
+        )
+
+    # R3: winsorized variant — clip total_rate_per_1000 at 5th/95th percentile on a copy
+    _crime_col = "total_rate_per_1000"
+    if _crime_col in model_df.columns:
+        _crime_numeric = pd.to_numeric(model_df[_crime_col], errors="coerce").dropna()
+        if len(_crime_numeric) >= 10:
+            _p5 = float(np.percentile(_crime_numeric, 5))
+            _p95 = float(np.percentile(_crime_numeric, 95))
+            _winsorized_df = model_df.copy()
+            _winsorized_df[_crime_col] = np.clip(
+                pd.to_numeric(_winsorized_df[_crime_col], errors="coerce"), _p5, _p95
+            )
+            winsorized_result = run_zip_regression(
+                _winsorized_df,
+                predictors=DEFAULT_PREDICTORS,
+                controls=DEFAULT_CONTROLS,
+                model_label="baseline_winsorized",
+            )
+            results.append(winsorized_result)
+
+    # R4: spatial lag model — gracefully skipped if spreg/libpysal unavailable or fit fails
+    _spatial_result = _fit_spatial_lag_model(
+        model_df,
+        predictors=DEFAULT_PREDICTORS,
+        controls=DEFAULT_CONTROLS,
+        model_label="spatial_lag",
+    )
+    if _spatial_result is not None:
+        results.append(_spatial_result)
+
+    # Parsimonious "best explanation" model — one representative per collinearity cluster:
+    #   Cluster 1 (socioeconomic): educational_attainment
+    #   Cluster 3 (price level): realtor_listing_price
+    #   Standalone (market pressure): aggregate_market_pressure_index
+    # No additional controls — the three predictors *are* the model.
+    _parsimonious_predictors = (
+        "educational_attainment",
+        "realtor_listing_price",
+        "aggregate_market_pressure_index",
+    )
+    _parsimonious_available = all(col in model_df.columns for col in _parsimonious_predictors)
+    if _parsimonious_available:
+        try:
+            parsimonious_result = run_zip_regression(
+                model_df,
+                predictors=_parsimonious_predictors,
+                controls=(),
+                model_label="parsimonious",
+            )
+            results.append(parsimonious_result)
+        except (ValueError, KeyError) as exc:
+            print(
+                f"[analyze] NOTE: parsimonious model skipped — {exc}",
+                flush=True,
+            )
+    else:
+        _missing = [c for c in _parsimonious_predictors if c not in model_df.columns]
+        print(
+            f"[analyze] NOTE: parsimonious model skipped — missing columns: {', '.join(_missing)}",
+            flush=True,
+        )
+
     if expanded_result.nobs < baseline_result.nobs:
         _fhfa_drop = baseline_result.nobs - expanded_result.nobs
         print(
@@ -122,6 +268,9 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
             "See model_validation_notes.md for discussion.",
             flush=True,
         )
+
+    # R6: audit baseline controls for collinearity; writes diagnostics and prints warnings
+    baseline_control_audit = _audit_baseline_controls(model_df)
 
     coefficients_path = settings.reports_dir / "regression_coefficients.csv"
     metrics_path = settings.reports_dir / "regression_metrics.csv"
@@ -144,7 +293,9 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     trend_notes_path = settings.reports_dir / "crime_trend_decomposition.md"
     feature_selection_metrics_path = settings.reports_dir / "feature_selection_metrics.csv"
     feature_selection_notes_path = settings.reports_dir / "feature_selection_notes.md"
-    feature_power_retention_metrics_path = settings.reports_dir / "feature_power_retention_metrics.csv"
+    feature_power_retention_metrics_path = (
+        settings.reports_dir / "feature_power_retention_metrics.csv"
+    )
     feature_power_retention_notes_path = settings.reports_dir / "feature_power_retention_notes.md"
     forecast_model_metrics_path = settings.reports_dir / "forecast_model_metrics.csv"
     crime_forecasts_path = settings.reports_dir / "crime_forecasts.csv"
@@ -167,14 +318,21 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     comprehensive_validation_metrics_path = (
         settings.reports_dir / "comprehensive_validation_metrics.csv"
     )
-    comprehensive_validation_notes_path = (
-        settings.reports_dir / "comprehensive_validation_notes.md"
-    )
+    comprehensive_validation_notes_path = settings.reports_dir / "comprehensive_validation_notes.md"
     policy_recommendations_path = settings.reports_dir / "policy_recommendations_by_segment.csv"
     policy_recommendations_notes_path = (
         settings.reports_dir / "policy_recommendations_by_segment.md"
     )
     policy_guardrails_path = settings.reports_dir / "policy_guardrails.md"
+    baseline_control_audit_path = settings.reports_dir / "baseline_control_audit.csv"
+    factor_importance_univariate_path = settings.reports_dir / "factor_importance_univariate.csv"
+    factor_importance_standardized_path = (
+        settings.reports_dir / "factor_importance_standardized.csv"
+    )
+    factor_importance_variance_decomposition_path = (
+        settings.reports_dir / "factor_importance_variance_decomposition.csv"
+    )
+    factor_importance_summary_path = settings.reports_dir / "factor_importance_summary.md"
     report_path = settings.reports_dir / "summary.md"
 
     coefficients = _apply_regression_guardrails(
@@ -249,18 +407,14 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
 
     # --- DQA-H2: FHFA confound visibility --------------------------------
     if expanded_result.nobs < baseline_result.nobs:
-        baseline_zips = set(
-            pd.Series(baseline_result.model_frame["zip"], dtype="string").dropna()
-        )
-        expanded_zips = set(
-            pd.Series(expanded_result.model_frame["zip"], dtype="string").dropna()
-        )
+        baseline_zips = set(pd.Series(baseline_result.model_frame["zip"], dtype="string").dropna())
+        expanded_zips = set(pd.Series(expanded_result.model_frame["zip"], dtype="string").dropna())
         excluded_zips = sorted(baseline_zips - expanded_zips)
-        influence_flagged_zips = set(
-            pd.Series(
-                influence_robustness.get("removed_zip"), dtype="string"
-            ).dropna()
-        ) if not influence_robustness.empty else set()
+        influence_flagged_zips = (
+            set(pd.Series(influence_robustness.get("removed_zip"), dtype="string").dropna())
+            if not influence_robustness.empty
+            else set()
+        )
         excluded_in_influence = sorted(set(excluded_zips) & influence_flagged_zips)
         confound_note = (
             f"- DQA-H2: sensitivity-check model dropped {len(excluded_zips)} ZIP(s) "
@@ -375,6 +529,17 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     statistical_guardrails.to_csv(statistical_guardrails_path, index=False)
     comprehensive_validation_metrics.to_csv(comprehensive_validation_metrics_path, index=False)
     policy_recommendations.to_csv(policy_recommendations_path, index=False)
+    baseline_control_audit.to_csv(baseline_control_audit_path, index=False)
+
+    # Factor importance analysis (Phases 1–4)
+    fi_univariate, fi_standardized, fi_decomposition, fi_summary_md = (
+        _build_factor_importance_artifacts(model_df)
+    )
+    fi_univariate.to_csv(factor_importance_univariate_path, index=False)
+    fi_standardized.to_csv(factor_importance_standardized_path, index=False)
+    fi_decomposition.to_csv(factor_importance_variance_decomposition_path, index=False)
+    factor_importance_summary_path.write_text(fi_summary_md, encoding="utf-8")
+
     _write_residual_review(residuals, residual_review_path)
     _write_vif_notes(vif_notes, vif_notes_path)
     _write_validation_notes(validation_notes, validation_notes_path)
@@ -429,6 +594,7 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
     _write_geography_plot(model_df, geography_path)
     _write_zip_comparison_table(model_df, zip_comparison_path)
     _write_model_summary_table(metrics, model_summary_table_path)
+    _parsimonious_for_report = next((r for r in results if r.model_label == "parsimonious"), None)
     _write_summary_report(
         model_df=model_df,
         results=results,
@@ -439,6 +605,8 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
         cluster_stability=cluster_stability,
         settings=settings,
         output_path=report_path,
+        factor_importance_summary_md=fi_summary_md,
+        parsimonious_result=_parsimonious_for_report,
     )
 
     return {
@@ -489,4 +657,11 @@ def run_analysis(settings: "Settings") -> dict[str, str]:
         "policy_recommendations_notes": str(policy_recommendations_notes_path),
         "policy_guardrails": str(policy_guardrails_path),
         "summary": str(report_path),
+        "baseline_control_audit": str(baseline_control_audit_path),
+        "factor_importance_univariate": str(factor_importance_univariate_path),
+        "factor_importance_standardized": str(factor_importance_standardized_path),
+        "factor_importance_variance_decomposition": str(
+            factor_importance_variance_decomposition_path
+        ),
+        "factor_importance_summary": str(factor_importance_summary_path),
     }

@@ -479,10 +479,7 @@ def _fetch_bulk_table_frame(
 
 def _build_bulk_table_url(year: int, table_id: str) -> str:
     table_name = table_id.lower()
-    return (
-        f"{_build_bulk_table_directory_url(year)}/"
-        f"acsdt5y{year}-{table_name}.dat"
-    )
+    return f"{_build_bulk_table_directory_url(year)}/acsdt5y{year}-{table_name}.dat"
 
 
 def _build_bulk_table_directory_url(year: int) -> str:
@@ -552,9 +549,7 @@ def _finalize_census_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     if {"households_public_assistance", "households_total"} <= set(frame.columns):
         households_total = frame["households_total"].replace({0: np.nan})
-        frame["public_assistance_share"] = (
-            frame["households_public_assistance"] / households_total
-        )
+        frame["public_assistance_share"] = frame["households_public_assistance"] / households_total
 
     if {"public_transit_commuters", "total_commuters"} <= set(frame.columns):
         total_commuters = frame["total_commuters"].replace({0: np.nan})

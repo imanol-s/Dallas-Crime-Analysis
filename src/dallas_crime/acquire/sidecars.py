@@ -391,11 +391,15 @@ def _build_law_enforcement_sidecar(
 
     frame = frame.merge(crime_summary, on="zip", how="left")
     frame = frame.merge(census_current[["zip", "population"]], on="zip", how="left")
-    frame["violent_rate_per_1000"] = _safe_divide(frame["violent_incidents"], frame["population"]) * 1000
+    frame["violent_rate_per_1000"] = (
+        _safe_divide(frame["violent_incidents"], frame["population"]) * 1000
+    )
 
     arrests = _load_arrest_metrics(settings, zip_universe)
     frame = frame.merge(arrests, on="zip", how="left")
-    frame["arrest_rate_per_1000_3y"] = _safe_divide(frame["arrest_count_3y"], frame["population"]) * 1000
+    frame["arrest_rate_per_1000_3y"] = (
+        _safe_divide(frame["arrest_count_3y"], frame["population"]) * 1000
+    )
 
     violent_inverse = 1 - _scale_unit_interval(frame["violent_rate_per_1000"])
     arrest_scaled = _scale_unit_interval(frame["arrest_rate_per_1000_3y"])

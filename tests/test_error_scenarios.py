@@ -327,9 +327,7 @@ def test_prepare_temporal_analysis_inputs_with_missing_columns():
 
 def test_build_forecast_artifacts_with_empty_summary():
     """Empty temporal summary should return empty forecast artifacts."""
-    metrics, forecasts, intervals, notes = _build_forecast_artifacts(
-        pd.DataFrame(), {}
-    )
+    metrics, forecasts, intervals, notes = _build_forecast_artifacts(pd.DataFrame(), {})
     assert metrics.empty
     assert forecasts.empty
     assert intervals.empty

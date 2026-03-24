@@ -150,9 +150,7 @@ class Settings:
     def resolved_crime_history_where_clause(self) -> str:
         if self.crime_history_where_clause:
             return self.crime_history_where_clause
-        return self._resolved_date_where_clause(
-            lookback_days=self.crime_history_lookback_days
-        )
+        return self._resolved_date_where_clause(lookback_days=self.crime_history_lookback_days)
 
     def housing_query_for_zip(self, zip_code: str) -> str:
         if "{zip}" in self.housing_query_template:

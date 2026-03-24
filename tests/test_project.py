@@ -25,8 +25,30 @@ def _write_model_dataset(settings: Settings) -> None:
             "total_rate_per_1000": [31.2, 29.8, 28.5, 26.3, 25.6, 24.6, 23.0, 21.9, 20.3, 19.5],
             "violent_rate_per_1000": [9.2, 8.7, 8.1, 7.5, 7.1, 6.8, 6.1, 5.7, 5.2, 4.9],
             "property_rate_per_1000": [22.0, 21.1, 20.4, 19.0, 18.5, 17.8, 16.9, 16.2, 15.1, 14.6],
-            "centroid_latitude": [32.77, 32.775, 32.78, 32.785, 32.79, 32.795, 32.8, 32.805, 32.81, 32.815],
-            "centroid_longitude": [-96.82, -96.815, -96.81, -96.805, -96.8, -96.795, -96.79, -96.785, -96.78, -96.775],
+            "centroid_latitude": [
+                32.77,
+                32.775,
+                32.78,
+                32.785,
+                32.79,
+                32.795,
+                32.8,
+                32.805,
+                32.81,
+                32.815,
+            ],
+            "centroid_longitude": [
+                -96.82,
+                -96.815,
+                -96.81,
+                -96.805,
+                -96.8,
+                -96.795,
+                -96.79,
+                -96.785,
+                -96.78,
+                -96.775,
+            ],
             "median_household_income": [
                 52000,
                 54000,
@@ -78,6 +100,7 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
         "residual_review",
         "vif",
         "vif_notes",
+        "baseline_control_audit",
         "scatter_plot",
         "geography_plot",
         "cluster_assignments",
@@ -118,17 +141,22 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
         "policy_recommendations_notes",
         "policy_guardrails",
         "summary",
+        "factor_importance_univariate",
+        "factor_importance_standardized",
+        "factor_importance_variance_decomposition",
+        "factor_importance_summary",
     }
     assert set(outputs) == expected_keys
     for output in outputs.values():
         assert Path(output).exists()
 
     metrics = pd.read_csv(outputs["metrics"])
-    assert set(metrics["model_label"]) == {"baseline", "sensitivity_check"}
+    # baseline and sensitivity_check must always be present; new model variants may also appear
+    assert {"baseline", "sensitivity_check"} <= set(metrics["model_label"])
     assert {"nobs", "r_squared", "adjusted_r_squared"} <= set(metrics.columns)
 
     coefficients = pd.read_csv(outputs["coefficients"])
-    assert set(coefficients["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(coefficients["model_label"])
     assert {
         "term",
         "estimate",
@@ -139,15 +167,15 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
     } <= set(coefficients.columns)
 
     sample_sizes = pd.read_csv(outputs["sample_sizes"])
-    assert set(sample_sizes["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(sample_sizes["model_label"])
     assert sample_sizes["nobs"].min() >= 8
 
     residuals = pd.read_csv(outputs["residuals"])
-    assert set(residuals["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(residuals["model_label"])
     assert {"observed", "fitted_value", "residual", "absolute_residual"} <= set(residuals.columns)
 
     vif = pd.read_csv(outputs["vif"])
-    assert set(vif["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(vif["model_label"])
     assert {"term", "vif"} <= set(vif.columns)
 
     cluster_assignments = pd.read_csv(outputs["cluster_assignments"])
@@ -199,7 +227,7 @@ def test_run_analysis_writes_report_artifacts_without_optional_history(tmp_path:
     }
 
     validation_metrics = pd.read_csv(outputs["validation_metrics"])
-    assert set(validation_metrics["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(validation_metrics["model_label"])
     assert {
         "loocv_rmse",
         "predicted_r_squared",
@@ -375,7 +403,10 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
                     "property_incidents": 60 - period_index,
                     "other_incidents": 10,
                     "population": 9000 + (zip_index * 250),
-                    "total_rate_per_1000": 32 - (zip_index * 0.7) - (period_index * 0.5) + seasonal_adjustment,
+                    "total_rate_per_1000": 32
+                    - (zip_index * 0.7)
+                    - (period_index * 0.5)
+                    + seasonal_adjustment,
                     "violent_rate_per_1000": 10 - (zip_index * 0.2) - (period_index * 0.1),
                     "property_rate_per_1000": 22 - (zip_index * 0.5) - (period_index * 0.4),
                 }
@@ -408,7 +439,9 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     trend_decomposition = pd.read_csv(outputs["trend_decomposition"])
     assert not trend_decomposition.empty
-    assert {"scope", "period_start", "trend_total_rate_per_1000"} <= set(trend_decomposition.columns)
+    assert {"scope", "period_start", "trend_total_rate_per_1000"} <= set(
+        trend_decomposition.columns
+    )
 
     forecast_model_metrics = pd.read_csv(outputs["forecast_model_metrics"])
     assert set(forecast_model_metrics["model_name"]) == {
@@ -429,9 +462,14 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
     assert crime_forecasts["zip"].astype(str).nunique() == 10
     assert {"forecast_tier", "policy_eligible", "selection_rule"} <= set(crime_forecasts.columns)
     assert set(crime_forecasts["forecast_tier"]) == {"high_confidence", "limited_history"}
-    assert crime_forecasts.loc[
-        crime_forecasts["forecast_tier"] == "limited_history", "policy_eligible"
-    ].astype(int).eq(0).all()
+    assert (
+        crime_forecasts.loc[
+            crime_forecasts["forecast_tier"] == "limited_history", "policy_eligible"
+        ]
+        .astype(int)
+        .eq(0)
+        .all()
+    )
 
     forecast_intervals = pd.read_csv(outputs["forecast_confidence_intervals"])
     assert not forecast_intervals.empty
@@ -456,16 +494,22 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     forecast_interval_calibration = pd.read_csv(outputs["forecast_interval_calibration"])
     assert not forecast_interval_calibration.empty
-    assert {"evaluation_scope", "selected_family", "interval_level", "calibration_pass", "shape_pass"} <= set(
-        forecast_interval_calibration.columns
-    )
+    assert {
+        "evaluation_scope",
+        "selected_family",
+        "interval_level",
+        "calibration_pass",
+        "shape_pass",
+    } <= set(forecast_interval_calibration.columns)
     assert {"selected_zip_model", "forecast_output_shape"} <= set(
         forecast_interval_calibration["evaluation_scope"]
     )
 
     residuals = pd.read_csv(outputs["residuals"])
     assert {"is_high_influence_flagged", "influence_flag_reason"} <= set(residuals.columns)
-    assert set(pd.to_numeric(residuals["is_high_influence_flagged"], errors="coerce").dropna().unique()) <= {
+    assert set(
+        pd.to_numeric(residuals["is_high_influence_flagged"], errors="coerce").dropna().unique()
+    ) <= {
         0,
         1,
     }
@@ -490,9 +534,13 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     drift_diagnostics = pd.read_csv(outputs["drift_diagnostics"])
     assert not drift_diagnostics.empty
-    assert {"entity_type", "entity_id", "z_score", "drift_flag", "trailing_contiguous_quarters"} <= set(
-        drift_diagnostics.columns
-    )
+    assert {
+        "entity_type",
+        "entity_id",
+        "z_score",
+        "drift_flag",
+        "trailing_contiguous_quarters",
+    } <= set(drift_diagnostics.columns)
 
     feature_selection_metrics = pd.read_csv(outputs["feature_selection_metrics"])
     assert not feature_selection_metrics.empty
@@ -514,9 +562,7 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     predictive_model_predictions = pd.read_csv(outputs["predictive_model_predictions"])
     assert not predictive_model_predictions.empty
-    assert (
-        predictive_model_predictions["model_label"] == "ensemble_top2_inverse_rmse"
-    ).any()
+    assert (predictive_model_predictions["model_label"] == "ensemble_top2_inverse_rmse").any()
 
     cluster_stability = pd.read_csv(outputs["cluster_stability_diagnostics"])
     assert not cluster_stability.empty
@@ -531,7 +577,7 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
 
     influence_robustness = pd.read_csv(outputs["influence_robustness_diagnostics"])
     assert not influence_robustness.empty
-    assert set(influence_robustness["model_label"]) == {"baseline", "sensitivity_check"}
+    assert {"baseline", "sensitivity_check"} <= set(influence_robustness["model_label"])
     assert {
         "mean_home_value_pct_delta",
         "p90_home_value_pct_delta",
@@ -541,7 +587,9 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
         "fit_improvement_warning",
     } <= set(influence_robustness.columns)
     # robustness_pass depends on the active model spec; assert it contains only valid 0/1 values
-    assert set(pd.to_numeric(influence_robustness["robustness_pass"], errors="coerce").dropna().unique()) <= {0, 1}
+    assert set(
+        pd.to_numeric(influence_robustness["robustness_pass"], errors="coerce").dropna().unique()
+    ) <= {0, 1}
 
     statistical_guardrails = pd.read_csv(outputs["statistical_guardrails"])
     assert not statistical_guardrails.empty
@@ -556,9 +604,7 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
         "temporal_holdout",
         "interval_calibration",
         "scenario",
-    } <= set(
-        comprehensive_validation["domain"]
-    )
+    } <= set(comprehensive_validation["domain"])
 
     policy_recommendations = pd.read_csv(outputs["policy_recommendations"])
     assert not policy_recommendations.empty
@@ -572,11 +618,13 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
         "segment_confidence_tier",
         "guardrail_flags",
         "evidence_posture",
-    } <= set(
-        policy_recommendations.columns
-    )
+    } <= set(policy_recommendations.columns)
     assert set(policy_recommendations["priority_tier"]) <= {"high", "moderate", "watch"}
-    assert set(policy_recommendations["segment_guardrail_status"]) <= {"blocked", "caution", "clear"}
+    assert set(policy_recommendations["segment_guardrail_status"]) <= {
+        "blocked",
+        "caution",
+        "clear",
+    }
 
     forecast_notes = Path(outputs["forecast_notes"]).read_text()
     assert "Selected high-confidence ZIP-level models" in forecast_notes
@@ -591,6 +639,60 @@ def test_run_analysis_populates_optional_history_artifacts(tmp_path: Path):
     assert "exploratory, non-causal" in policy_guardrails
     assert "High-confidence forecast/scenario coverage" in policy_guardrails
     assert "Lower-confidence forecast-only coverage" in policy_guardrails
+
+
+def test_factor_importance_artifacts_are_populated(tmp_path: Path):
+    """Verify factor importance artifacts have the expected shape and content."""
+    settings = Settings.from_env(project_root=tmp_path)
+    settings.ensure_directories()
+    _write_model_dataset(settings)
+
+    outputs = run_analysis(settings)
+
+    # Phase 1: univariate screening has at least 5 rows
+    univariate = pd.read_csv(outputs["factor_importance_univariate"])
+    assert len(univariate) >= 5
+    assert {"feature", "n_complete", "pearson_r", "spearman_rho", "univariate_r_squared"} <= set(
+        univariate.columns
+    )
+
+    # Phase 2: standardized coefficients have at least 1 row with abs_standardized_beta > 0
+    standardized = pd.read_csv(outputs["factor_importance_standardized"])
+    assert len(standardized) >= 1
+    assert (standardized["abs_standardized_beta"] > 0).any()
+
+    # Phase 3: variance decomposition sums lmg_r_squared_share to within 0.01 of total model R²
+    decomposition = pd.read_csv(outputs["factor_importance_variance_decomposition"])
+    assert not decomposition.empty
+    lmg_sum = float(decomposition["lmg_r_squared_share"].sum())
+    # Reconstruct total R² from the standardized model: fit the same features
+    from dallas_crime.pipeline.analyze.core import _ensure_dependent_column
+
+    model_df = pd.read_csv(settings.processed_dir / "model_dataset.csv")
+    frame = _ensure_dependent_column(model_df, "log_home_value")
+    final_features = standardized["feature"].tolist()
+    all_cols = ["log_home_value", *final_features]
+    work = frame[all_cols].copy()
+    for c in all_cols:
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.dropna().reset_index(drop=True)
+    z_work = work.copy()
+    for c in all_cols:
+        col_std = float(work[c].std(ddof=1))
+        if col_std > 0:
+            z_work[c] = (work[c] - work[c].mean()) / col_std
+    import statsmodels.formula.api as smf
+
+    formula = "log_home_value ~ " + " + ".join(final_features)
+    total_r2 = float(smf.ols(formula=formula, data=z_work).fit().rsquared)
+    assert abs(lmg_sum - total_r2) < 0.01, (
+        f"LMG shares sum {lmg_sum:.6f} differs from total R² {total_r2:.6f} by more than 0.01"
+    )
+
+    # Phase 4: summary markdown exists and is non-empty
+    summary_text = Path(outputs["factor_importance_summary"]).read_text()
+    assert len(summary_text) > 0
+    assert "Factor Importance Summary" in summary_text
 
 
 def test_drift_min_completeness_constant_exists():
@@ -646,3 +748,27 @@ def test_drift_prorate_insufficient_completeness():
         row = zip_rows.iloc[0]
         assert row["drift_flag"] == -1
         assert np.isnan(row["z_score"])
+
+
+def test_spatial_lag_model_produces_coefficient_row(tmp_path: Path):
+    """R4: spatial lag model (if spreg available) writes a row in regression_coefficients.csv."""
+    settings = Settings.from_env(project_root=tmp_path)
+    settings.ensure_directories()
+    _write_model_dataset(settings)
+
+    outputs = run_analysis(settings)
+
+    coefficients = pd.read_csv(outputs["coefficients"])
+    # If spreg is installed the spatial_lag model must appear in coefficients.
+    # If spreg is absent the test passes silently (graceful-degrade behaviour is correct).
+    try:
+        import spreg  # noqa: F401
+
+        assert "spatial_lag" in set(coefficients["model_label"]), (
+            "spreg is installed but spatial_lag model label not found in regression_coefficients.csv"
+        )
+        spatial_rows = coefficients[coefficients["model_label"] == "spatial_lag"]
+        assert not spatial_rows.empty
+        assert "total_rate_per_1000" in set(spatial_rows["term"])
+    except ImportError:
+        pass  # graceful degradation — spatial lag was skipped
