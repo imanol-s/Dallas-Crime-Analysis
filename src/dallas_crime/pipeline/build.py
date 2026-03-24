@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Iterable, Mapping
 import numpy as np
 import pandas as pd
 from dallas_crime.acquire.utils import AcquisitionError, load_dfw_zip_set
+from dallas_crime.utils import _coerce_numeric, _safe_divide
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -96,10 +97,6 @@ def _coerce_dates(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
 
-def _coerce_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce")
-
-
 def _optional_numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     """Return a numeric series for *column*, or NaN series if missing."""
     if column in frame.columns:
@@ -111,13 +108,6 @@ def _normalize_ratio(series: pd.Series) -> pd.Series:
     numeric = _coerce_numeric(series)
     values = np.where((numeric > 1) & (numeric <= 100), numeric / 100, numeric)
     return pd.Series(values, index=numeric.index, dtype="float64")
-
-
-def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    numerator_num = _coerce_numeric(numerator)
-    denominator_num = _coerce_numeric(denominator)
-    values = np.where(denominator_num > 0, numerator_num / denominator_num, np.nan)
-    return pd.Series(values, index=numerator_num.index, dtype="float64")
 
 
 def _trend_slope(
@@ -774,7 +764,9 @@ def build_crime_history_features(crime_history_panel: pd.DataFrame) -> pd.DataFr
         ordered = zip_frame.sort_values("period_start", ignore_index=True).copy()
         total_rates = ordered["total_rate_per_1000"].dropna()
         latest_row = ordered.iloc[-1]
-        latest_quarter = int(latest_row["period_quarter"]) if pd.notna(latest_row["period_quarter"]) else np.nan
+        latest_quarter = (
+            int(latest_row["period_quarter"]) if pd.notna(latest_row["period_quarter"]) else np.nan
+        )
         lag1_rate = (
             float(ordered.iloc[-2]["total_rate_per_1000"])
             if len(ordered) >= 2 and pd.notna(ordered.iloc[-2]["total_rate_per_1000"])
@@ -851,10 +843,18 @@ def build_crime_history_features(crime_history_panel: pd.DataFrame) -> pd.DataFr
                 "crime_history_lag2_total_rate_per_1000": lag2_rate,
                 "crime_history_lag4_total_rate_per_1000": lag4_rate,
                 "crime_history_latest_quarter_number": latest_quarter,
-                "crime_history_latest_is_q1": int(latest_quarter == 1) if pd.notna(latest_quarter) else 0,
-                "crime_history_latest_is_q2": int(latest_quarter == 2) if pd.notna(latest_quarter) else 0,
-                "crime_history_latest_is_q3": int(latest_quarter == 3) if pd.notna(latest_quarter) else 0,
-                "crime_history_latest_is_q4": int(latest_quarter == 4) if pd.notna(latest_quarter) else 0,
+                "crime_history_latest_is_q1": int(latest_quarter == 1)
+                if pd.notna(latest_quarter)
+                else 0,
+                "crime_history_latest_is_q2": int(latest_quarter == 2)
+                if pd.notna(latest_quarter)
+                else 0,
+                "crime_history_latest_is_q3": int(latest_quarter == 3)
+                if pd.notna(latest_quarter)
+                else 0,
+                "crime_history_latest_is_q4": int(latest_quarter == 4)
+                if pd.notna(latest_quarter)
+                else 0,
                 "crime_history_q1_mean_rate_per_1000": float(quarterly_mean_rates.get(1))
                 if 1 in quarterly_mean_rates
                 else np.nan,
@@ -1538,7 +1538,9 @@ def prepare_census_snapshot_panel(census_snapshots_df: pd.DataFrame) -> pd.DataF
     frame["renter_occupied_share"] = _normalize_ratio(renter_share_input)
     frame["poverty_rate"] = _normalize_ratio(poverty_rate_input)
     frame["housing_tenure_mix"] = _coerce_numeric(
-        frame.get("housing_tenure_mix", frame["owner_occupied_share"] - frame["renter_occupied_share"])
+        frame.get(
+            "housing_tenure_mix", frame["owner_occupied_share"] - frame["renter_occupied_share"]
+        )
     )
 
     keep = ["zip", "snapshot_year", *ACS_SNAPSHOT_METRICS]
@@ -1804,11 +1806,7 @@ def _build_panel_completeness_rows(
             observed_periods = 0
             first_period = None
             last_period = None
-        ratio = (
-            float(observed_periods / expected_periods)
-            if expected_periods > 0
-            else np.nan
-        )
+        ratio = float(observed_periods / expected_periods) if expected_periods > 0 else np.nan
         rows.append(
             {
                 "zip": zip_code,
@@ -1863,7 +1861,9 @@ def build_source_completeness_scores(
             zip_codes,
             category="crime_current",
             available_zips=_zip_set(crime_zip),
-            latest_period=crime_zip["period_start"].max() if "period_start" in crime_zip.columns else None,
+            latest_period=crime_zip["period_start"].max()
+            if "period_start" in crime_zip.columns
+            else None,
         )
     )
     rows.extend(
@@ -1879,7 +1879,9 @@ def build_source_completeness_scores(
             zip_codes,
             category="housing_current",
             available_zips=_zip_set(housing_zip),
-            latest_period=housing_zip["as_of_date"].max() if "as_of_date" in housing_zip.columns else None,
+            latest_period=housing_zip["as_of_date"].max()
+            if "as_of_date" in housing_zip.columns
+            else None,
         )
     )
     rows.extend(
@@ -1975,7 +1977,11 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
         _coerce_numeric(model_df["log_home_value"])
         if "log_home_value" in model_df.columns
         else (
-            np.log(_coerce_numeric(model_df["home_value"]).where(_coerce_numeric(model_df["home_value"]) > 0))
+            np.log(
+                _coerce_numeric(model_df["home_value"]).where(
+                    _coerce_numeric(model_df["home_value"]) > 0
+                )
+            )
             if "home_value" in model_df.columns
             else pd.Series(np.nan, index=model_df.index, dtype="float64")
         )
@@ -1989,7 +1995,9 @@ def build_interaction_features(model_df: pd.DataFrame) -> pd.DataFrame:
     frame["crime_rent_burden_interaction"] = crime_rate * rent_burden
     frame["crime_poverty_interaction"] = crime_rate * poverty_rate
     frame["crime_unemployment_interaction"] = crime_rate * unemployment_rate
-    frame["crime_density_interaction"] = crime_rate * np.log1p(pop_density.clip(lower=0))  # TODO (DQA-C3): null when pop_density is unavailable
+    frame["crime_density_interaction"] = crime_rate * np.log1p(
+        pop_density.clip(lower=0)
+    )  # TODO (DQA-C3): null when pop_density is unavailable
     frame["vacancy_poverty_interaction"] = vacancy_proxy * poverty_rate
     frame["momentum_home_value_pressure_interaction"] = momentum * log_home_value
     frame["market_momentum_interaction"] = annual_change_pct * momentum
@@ -2044,7 +2052,9 @@ def build_all(settings: "Settings") -> dict[str, str]:
         raise FileNotFoundError(f"Missing raw inputs: {missing_list}")
 
     crime_raw = pd.read_csv(crime_path)
-    crime_history_raw = pd.read_csv(crime_history_path) if crime_history_path.exists() else crime_raw.copy()
+    crime_history_raw = (
+        pd.read_csv(crime_history_path) if crime_history_path.exists() else crime_raw.copy()
+    )
     housing_raw = pd.read_csv(housing_path)
     housing_history_raw = (
         pd.read_csv(housing_history_path) if housing_history_path.exists() else pd.DataFrame()
@@ -2242,7 +2252,11 @@ def build_all(settings: "Settings") -> dict[str, str]:
     qa_summary = _build_qa_summary(
         datasets={
             "crime_zip": crime_zip,
-            **({"crime_history_panel": crime_history_panel} if not crime_history_panel.empty else {}),
+            **(
+                {"crime_history_panel": crime_history_panel}
+                if not crime_history_panel.empty
+                else {}
+            ),
             **(
                 {"crime_history_features": crime_history_features}
                 if not crime_history_features.empty

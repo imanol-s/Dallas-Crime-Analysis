@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from dallas_crime.acquire.utils import (
+    REQUEST_TIMEOUT_SECONDS,
     AcquisitionError,
     run_with_retry,
     utc_timestamp,
@@ -25,7 +26,6 @@ if TYPE_CHECKING:
     from dallas_crime.config import Settings
 
 CensusOpener = Callable[[Request], Any]
-REQUEST_TIMEOUT_SECONDS = 30
 ZCTA_GEO_ID_PREFIX = "860Z200US"
 BULK_TABLE_BASE_URL = "https://www2.census.gov/programs-surveys/acs/summary_file"
 BULK_TABLE_SPECS = {
@@ -351,7 +351,7 @@ def fetch_census_year_data(
         )
         if frame.empty:
             raise AcquisitionError("Census ACS payload returned no rows.")
-    except AcquisitionError as exc:
+    except (AcquisitionError, KeyError) as exc:
         fallback_reason = str(exc)
         source_kind = "bulk_table_based"
         source_url = _build_bulk_table_directory_url(year)
@@ -479,10 +479,7 @@ def _fetch_bulk_table_frame(
 
 def _build_bulk_table_url(year: int, table_id: str) -> str:
     table_name = table_id.lower()
-    return (
-        f"{_build_bulk_table_directory_url(year)}/"
-        f"acsdt5y{year}-{table_name}.dat"
-    )
+    return f"{_build_bulk_table_directory_url(year)}/acsdt5y{year}-{table_name}.dat"
 
 
 def _build_bulk_table_directory_url(year: int) -> str:
@@ -552,9 +549,7 @@ def _finalize_census_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     if {"households_public_assistance", "households_total"} <= set(frame.columns):
         households_total = frame["households_total"].replace({0: np.nan})
-        frame["public_assistance_share"] = (
-            frame["households_public_assistance"] / households_total
-        )
+        frame["public_assistance_share"] = frame["households_public_assistance"] / households_total
 
     if {"public_transit_commuters", "total_commuters"} <= set(frame.columns):
         total_commuters = frame["total_commuters"].replace({0: np.nan})

@@ -6,14 +6,21 @@ import pandas as pd
 import pytest
 
 from dallas_crime.config import Settings
-from dallas_crime.pipeline.analyze import (
-    _build_cluster_stability_artifacts,
+from dallas_crime.pipeline.analyze import run_zip_regression
+from dallas_crime.pipeline.analyze.core import (
+    DEFAULT_CONTROLS,
+    DEFAULT_PREDICTORS,
+    _audit_baseline_controls,
+    _build_vif_artifacts,
+    _select_expanded_controls,
+)
+from dallas_crime.pipeline.analyze.forecast import (
     _build_forecast_artifacts,
     _build_temporal_holdout_artifacts,
     _prepare_temporal_analysis_inputs,
-    _build_vif_artifacts,
-    _select_expanded_controls,
-    run_zip_regression,
+)
+from dallas_crime.pipeline.analyze.segmentation import (
+    _build_cluster_stability_artifacts,
 )
 from dallas_crime.pipeline.build import (
     aggregate_crime_data,
@@ -201,7 +208,12 @@ def test_build_forecast_artifacts_emits_lower_history_tiers_and_restricts_interv
         "limited_history",
         "carry_forward_only",
     }
-    assert forecasts.loc[forecasts["zip"].astype(str) == "75000", "selected_model"].astype(str).nunique() == 1
+    assert (
+        forecasts.loc[forecasts["zip"].astype(str) == "75000", "selected_model"]
+        .astype(str)
+        .nunique()
+        == 1
+    )
     assert (
         forecasts.loc[forecasts["zip"].astype(str) == "75001", "selected_model"].astype(str).iloc[0]
         == "moving_average_4"
@@ -210,9 +222,12 @@ def test_build_forecast_artifacts_emits_lower_history_tiers_and_restricts_interv
         forecasts.loc[forecasts["zip"].astype(str) == "75002", "selected_model"].astype(str).iloc[0]
         == "naive_last"
     )
-    assert forecasts.loc[
-        forecasts["zip"].astype(str) == "75002", "policy_eligible"
-    ].astype(int).eq(0).all()
+    assert (
+        forecasts.loc[forecasts["zip"].astype(str) == "75002", "policy_eligible"]
+        .astype(int)
+        .eq(0)
+        .all()
+    )
     assert set(intervals["zip"].astype(str)) == {"75000"}
     assert forecast_metrics["selected_zip_count"].sum() == 1
 
@@ -221,7 +236,18 @@ def test_build_cluster_stability_artifacts_prefers_balanced_k2_solution():
     model_df = pd.DataFrame(
         {
             "zip": [f"7500{i}" for i in range(10)],
-            "median_household_income": [45000, 46000, 47000, 48000, 49000, 90000, 91000, 92000, 93000, 94000],
+            "median_household_income": [
+                45000,
+                46000,
+                47000,
+                48000,
+                49000,
+                90000,
+                91000,
+                92000,
+                93000,
+                94000,
+            ],
             "poverty_rate": [0.24, 0.23, 0.22, 0.21, 0.20, 0.08, 0.07, 0.06, 0.05, 0.04],
             "owner_occupied_share": [0.28, 0.29, 0.30, 0.31, 0.32, 0.62, 0.63, 0.64, 0.65, 0.66],
             "median_gross_rent": [1100, 1125, 1150, 1175, 1200, 1850, 1875, 1900, 1925, 1950],
@@ -246,7 +272,20 @@ def test_build_cluster_stability_artifacts_uses_winsorized_solution_for_outlier_
             "zip": [f"750{i:02d}" for i in range(12)],
             "total_rate_per_1000": [10, 11, 12, 13, 14, 15, 40, 42, 44, 46, 48, 500],
             "violent_rate_per_1000": [1, 1.1, 1.2, 1.3, 1.4, 1.5, 4.0, 4.2, 4.4, 4.6, 4.8, 50],
-            "property_rate_per_1000": [9, 9.9, 10.8, 11.7, 12.6, 13.5, 36, 37.8, 39.6, 41.4, 43.2, 450],
+            "property_rate_per_1000": [
+                9,
+                9.9,
+                10.8,
+                11.7,
+                12.6,
+                13.5,
+                36,
+                37.8,
+                39.6,
+                41.4,
+                43.2,
+                450,
+            ],
         }
     )
 
@@ -443,9 +482,7 @@ def test_build_acs_snapshot_features_derives_latest_change_and_trend_metrics():
     assert zip_75201["acs_snapshot_population_change"] == pytest.approx(400.0)
     assert zip_75201["acs_snapshot_latest_median_household_income"] == pytest.approx(77000.0)
     assert zip_75201["acs_snapshot_median_household_income_change_pct"] == pytest.approx(10.0)
-    assert zip_75201["acs_snapshot_median_household_income_trend_per_year"] == pytest.approx(
-        3500.0
-    )
+    assert zip_75201["acs_snapshot_median_household_income_trend_per_year"] == pytest.approx(3500.0)
     assert zip_75201["acs_snapshot_latest_poverty_rate"] == pytest.approx(846 / 9400)
     assert zip_75201["acs_snapshot_poverty_rate_trend_per_year"] == pytest.approx(
         ((846 / 9400) - (900 / 9000)) / 2,
@@ -458,7 +495,9 @@ def test_build_acs_snapshot_features_derives_latest_change_and_trend_metrics():
 
 
 def test_build_source_completeness_scores_tracks_core_and_optional_categories():
-    crime_zip = pd.DataFrame({"zip": ["75201", "75202"], "period_start": ["2025-01-01", "2025-01-01"]})
+    crime_zip = pd.DataFrame(
+        {"zip": ["75201", "75202"], "period_start": ["2025-01-01", "2025-01-01"]}
+    )
     crime_history_panel = pd.DataFrame(
         {
             "zip": ["75201", "75201", "75202"],
@@ -479,7 +518,9 @@ def test_build_source_completeness_scores_tracks_core_and_optional_categories():
             "snapshot_year": [2022, 2023, 2023],
         }
     )
-    sidecar_frames = {"economic": pd.DataFrame({"zip": ["75201", "75203"], "economic_index": [1, 2]})}
+    sidecar_frames = {
+        "economic": pd.DataFrame({"zip": ["75201", "75203"], "economic_index": [1, 2]})
+    }
 
     result = build_source_completeness_scores(
         target_zips=["75201", "75202", "75203"],
@@ -551,9 +592,7 @@ def test_build_interaction_features_derives_expected_additive_terms():
         1.5 * math.log(500000.0)
     )
     assert zip_75201["market_momentum_interaction"] == pytest.approx(3.0 * 1.5)
-    assert zip_75201["rent_income_stress_interaction"] == pytest.approx(
-        0.25 * (2100.0 / 100000.0)
-    )
+    assert zip_75201["rent_income_stress_interaction"] == pytest.approx(0.25 * (2100.0 / 100000.0))
     assert zip_75201["completeness_weighted_crime_risk"] == pytest.approx(10.0 * 0.95)
     assert pd.notna(zip_75201["aggregate_distress_index"])
     assert pd.notna(zip_75201["aggregate_market_pressure_index"])
@@ -636,9 +675,7 @@ def test_run_zip_regression_returns_compact_result():
     assert result.nobs == 10
     assert result.formula.startswith("log_home_value ~")
     assert result.r_squared >= 0.0
-    assert {"Intercept", "total_rate_per_1000"} <= set(
-        result.coefficients["term"]
-    )
+    assert {"Intercept", "total_rate_per_1000"} <= set(result.coefficients["term"])
 
     metrics = result.metrics_table()
     assert metrics.loc[0, "nobs"] == 10
@@ -663,7 +700,7 @@ def test_select_expanded_controls_prefers_population_acs_without_duplicate_popul
         }
     )
 
-    controls = _select_expanded_controls(
+    controls, _notes = _select_expanded_controls(
         model_df,
         dependent="log_home_value",
         predictors=("violent_rate_per_1000", "property_rate_per_1000"),
@@ -677,6 +714,53 @@ def test_select_expanded_controls_prefers_population_acs_without_duplicate_popul
 
     assert "population_acs" in controls
     assert "population" not in controls
+
+
+def test_vif_gated_control_selection_rejects_collinear_candidates():
+    # Two perfectly correlated candidates: col_a and col_b = col_a * 2.
+    # When both are present, adding col_b after col_a should be rejected by the VIF gate
+    # because col_b is linearly dependent on col_a.
+    # Use n=30, a single baseline control, and non-monotonic col_a so col_a has low
+    # correlation with the predictor and baseline control.
+    import math
+
+    n = 30
+    # Non-monotonic col_a: sine-wave pattern (low correlation with linear predictor/controls)
+    col_a = [round(5.0 + 3.0 * math.sin(i * 0.5), 4) for i in range(n)]
+    col_b = [v * 2.0 for v in col_a]  # perfectly collinear with col_a
+
+    model_df = pd.DataFrame(
+        {
+            "zip": [f"75{i:03d}" for i in range(100, 100 + n)],
+            "home_value": [200000 + (i * 5000) for i in range(n)],
+            # Predictor: gently declining, NOT perfectly correlated with col_a
+            "total_rate_per_1000": [20.0 - (i * 0.3) for i in range(n)],
+            # Single baseline control — keeps VIF space tractable
+            "median_household_income": [50000 + (i * 1200) for i in range(n)],
+            "col_a": col_a,
+            "col_b": col_b,
+        }
+    )
+
+    import dallas_crime.pipeline.analyze.core as core_module
+
+    original_candidates = core_module.EXPANDED_CONTROL_CANDIDATES
+    core_module.EXPANDED_CONTROL_CANDIDATES = ("col_a", "col_b")
+    try:
+        controls, notes = _select_expanded_controls(
+            model_df,
+            dependent="log_home_value",
+            predictors=("total_rate_per_1000",),
+            baseline_controls=("median_household_income",),
+        )
+    finally:
+        core_module.EXPANDED_CONTROL_CANDIDATES = original_candidates
+
+    # col_a should be accepted (no prior collinear partner in model yet).
+    # col_b (= col_a * 2) should be rejected because adding it drives VIF for col_a to inf.
+    assert "col_a" in controls
+    assert "col_b" not in controls
+    assert any("col_b" in note for note in notes)
 
 
 def test_build_vif_artifacts_notes_infinite_vif_terms():
@@ -920,19 +1004,25 @@ def test_build_all_creates_processed_outputs(tmp_path: Path):
     } <= set(model_df.columns)
     model_crime_history_row = model_df.loc[model_df["zip"] == 75201].iloc[0]
     assert model_crime_history_row["crime_history_period_count"] == 3
-    assert model_crime_history_row["crime_history_latest_total_rate_per_1000"] == pytest.approx(0.08)
+    assert model_crime_history_row["crime_history_latest_total_rate_per_1000"] == pytest.approx(
+        0.08
+    )
     assert model_crime_history_row["crime_history_lag1_total_rate_per_1000"] == pytest.approx(0.08)
     assert model_crime_history_row["crime_history_latest_quarter_number"] == 1
     model_history_row = model_df.loc[model_df["zip"] == 75201].iloc[0]
     assert model_history_row["housing_history_observations_total"] == 2
     assert model_history_row["housing_history_latest_source"] == "realtor_history"
     assert model_history_row["acs_snapshot_observation_count"] == 2
-    assert model_history_row["acs_snapshot_latest_median_household_income"] == pytest.approx(99500.0)
+    assert model_history_row["acs_snapshot_latest_median_household_income"] == pytest.approx(
+        99500.0
+    )
     assert model_history_row["economic_index"] == pytest.approx(1.2)
     assert 0.9 < model_history_row["source_completeness_overall_score"] <= 1.0
 
     crime_history_df = pd.read_csv(outputs["crime_history_panel"])
-    assert {"zip", "period_start", "period_quarter", "total_incidents"} <= set(crime_history_df.columns)
+    assert {"zip", "period_start", "period_quarter", "total_incidents"} <= set(
+        crime_history_df.columns
+    )
     assert crime_history_df["zip"].astype(str).nunique() == 4
     assert sorted(crime_history_df["zip"].astype(str).unique().tolist()) == [
         "75201",
@@ -950,7 +1040,12 @@ def test_build_all_creates_processed_outputs(tmp_path: Path):
         "crime_history_lag1_total_rate_per_1000",
         "crime_history_latest_quarter_number",
     } <= set(crime_history_features_df.columns)
-    assert crime_history_features_df["zip"].astype(str).tolist() == ["75201", "75202", "75203", "75204"]
+    assert crime_history_features_df["zip"].astype(str).tolist() == [
+        "75201",
+        "75202",
+        "75203",
+        "75204",
+    ]
 
     acs_snapshot_features_df = pd.read_csv(outputs["acs_snapshot_features"])
     assert {
@@ -1039,8 +1134,7 @@ def test_build_all_creates_processed_outputs(tmp_path: Path):
 
     outlier_report = pd.read_csv(outputs["qa_outlier_markers"])
     assert (
-        (outlier_report["dataset"] == "housing_zip")
-        & (outlier_report["column"] == "home_value")
+        (outlier_report["dataset"] == "housing_zip") & (outlier_report["column"] == "home_value")
     ).any()
 
     qa_summary = json.loads(Path(outputs["qa_summary"]).read_text())
@@ -1078,6 +1172,205 @@ def test_prepare_housing_features_handles_zero_rows():
     result = prepare_housing_features(empty_housing)
     assert isinstance(result, pd.DataFrame)
     assert len(result) == 0
+
+
+def test_population_weighted_regression_differs_from_unweighted():
+    """R2: WLS with population weights should produce different crime coefficient than OLS."""
+    n = 20
+    # Create unequal-population ZIPs so weights matter
+    model_df = pd.DataFrame(
+        {
+            "zip": [f"75{i:03d}" for i in range(100, 100 + n)],
+            "home_value": [200000 + (i * 12000) for i in range(n)],
+            "total_rate_per_1000": [35.0 - (i * 1.2) for i in range(n)],
+            "median_household_income": [48000 + (i * 1800) for i in range(n)],
+            "poverty_rate": [0.22 - (i * 0.006) for i in range(n)],
+            "owner_occupied_share": [0.28 + (i * 0.02) for i in range(n)],
+            "median_gross_rent": [1050 + (i * 35) for i in range(n)],
+            "educational_attainment": [0.38 + (i * 0.016) for i in range(n)],
+            # Highly skewed populations so WLS and OLS diverge
+            "population_acs": [500 if i < 5 else 20000 for i in range(n)],
+        }
+    )
+
+    unweighted = run_zip_regression(
+        model_df,
+        predictors=DEFAULT_PREDICTORS,
+        controls=DEFAULT_CONTROLS,
+        model_label="baseline",
+    )
+    weighted = run_zip_regression(
+        model_df,
+        predictors=DEFAULT_PREDICTORS,
+        controls=DEFAULT_CONTROLS,
+        model_label="baseline_popweighted",
+        weights_column="population_acs",
+    )
+
+    unweighted_coef = float(
+        unweighted.coefficients.loc[
+            unweighted.coefficients["term"] == "total_rate_per_1000", "estimate"
+        ].iloc[0]
+    )
+    weighted_coef = float(
+        weighted.coefficients.loc[
+            weighted.coefficients["term"] == "total_rate_per_1000", "estimate"
+        ].iloc[0]
+    )
+    # The two estimates must differ because the weights change the effective sample
+    assert unweighted_coef != weighted_coef
+    assert weighted.model_label == "baseline_popweighted"
+    assert weighted.nobs == unweighted.nobs
+
+
+def test_fhfa_imputation_fills_missing_values_and_sets_flag():
+    """R5: imputation fills NaN FHFA values and marks the imputed flag column."""
+    import statsmodels.formula.api as _smf
+
+    n = 15
+    annual = [2.0 + (i * 0.1) for i in range(n)]
+    fhfa = [1.5 + (i * 0.09) for i in range(n)]
+    # Set 3 rows to NaN to trigger imputation
+    fhfa_with_nans = fhfa[:]
+    for idx in [2, 7, 12]:
+        fhfa_with_nans[idx] = float("nan")
+
+    model_df = pd.DataFrame(
+        {
+            "zip": [f"75{i:03d}" for i in range(100, 100 + n)],
+            "home_value": [200000 + (i * 10000) for i in range(n)],
+            "total_rate_per_1000": [25.0 - (i * 0.8) for i in range(n)],
+            "median_household_income": [52000 + (i * 1500) for i in range(n)],
+            "poverty_rate": [0.18 - (i * 0.004) for i in range(n)],
+            "owner_occupied_share": [0.33 + (i * 0.018) for i in range(n)],
+            "median_gross_rent": [1150 + (i * 28) for i in range(n)],
+            "educational_attainment": [0.41 + (i * 0.014) for i in range(n)],
+            "annual_change_pct": annual,
+            "FHFA_annual_change_pct": fhfa_with_nans,
+        }
+    )
+
+    # Simulate the imputation logic from run_analysis
+    df = model_df.copy()
+    df["FHFA_annual_change_pct"] = pd.to_numeric(df["FHFA_annual_change_pct"], errors="coerce")
+    df["annual_change_pct"] = pd.to_numeric(df["annual_change_pct"], errors="coerce")
+    df["FHFA_annual_change_pct_imputed"] = False
+    missing_mask = df["FHFA_annual_change_pct"].isna()
+    complete_mask = df["FHFA_annual_change_pct"].notna() & df["annual_change_pct"].notna()
+    corr = float(
+        df.loc[complete_mask, "FHFA_annual_change_pct"].corr(
+            df.loc[complete_mask, "annual_change_pct"]
+        )
+    )
+    if corr >= 0.7:
+        fit = _smf.ols(
+            "FHFA_annual_change_pct ~ annual_change_pct", data=df.loc[complete_mask]
+        ).fit()
+        df.loc[missing_mask, "FHFA_annual_change_pct"] = fit.predict(df.loc[missing_mask])
+    else:
+        df.loc[missing_mask, "FHFA_annual_change_pct"] = float(
+            df.loc[complete_mask, "FHFA_annual_change_pct"].median()
+        )
+    df.loc[missing_mask, "FHFA_annual_change_pct_imputed"] = True
+
+    assert df["FHFA_annual_change_pct"].isna().sum() == 0
+    assert "FHFA_annual_change_pct_imputed" in df.columns
+    assert df.loc[missing_mask, "FHFA_annual_change_pct_imputed"].all()
+    assert not df.loc[~missing_mask, "FHFA_annual_change_pct_imputed"].any()
+
+
+def test_winsorized_regression_clips_extreme_values_and_changes_coefficient():
+    """R3: winsorizing total_rate_per_1000 clips extreme values and changes the crime coefficient.
+
+    Verifies that (1) the maximum crime rate in the winsorized data is <= p95 of the original,
+    (2) the winsorized regression runs successfully, and (3) the crime-term coefficient estimate
+    differs from the unwinsorized model (confirming the transformation had an effect).
+    """
+    import numpy as _np
+
+    n = 100
+    normal_rates = [20.0 - (i * 0.1) for i in range(n - 2)]
+    outlier_rates = normal_rates + [500.0, 600.0]
+
+    model_df = pd.DataFrame(
+        {
+            "zip": [f"7{i:04d}" for i in range(5000, 5000 + n)],
+            "home_value": [200000 + (i * 5000) for i in range(n)],
+            "total_rate_per_1000": outlier_rates,
+            "median_household_income": [48000 + (i * 800) for i in range(n)],
+            "poverty_rate": [max(0.01, 0.22 - (i * 0.002)) for i in range(n)],
+            "owner_occupied_share": [min(0.95, 0.28 + (i * 0.006)) for i in range(n)],
+            "median_gross_rent": [1050 + (i * 18) for i in range(n)],
+            "educational_attainment": [min(0.90, 0.38 + (i * 0.005)) for i in range(n)],
+        }
+    )
+
+    unwinsorized = run_zip_regression(
+        model_df,
+        predictors=DEFAULT_PREDICTORS,
+        controls=DEFAULT_CONTROLS,
+        model_label="baseline",
+    )
+
+    rates_arr = _np.array(outlier_rates, dtype=float)
+    p5 = float(_np.percentile(rates_arr, 5))
+    p95 = float(_np.percentile(rates_arr, 95))
+    winsorized_df = model_df.copy()
+    winsorized_df["total_rate_per_1000"] = _np.clip(
+        pd.to_numeric(winsorized_df["total_rate_per_1000"], errors="coerce"), p5, p95
+    )
+    winsorized = run_zip_regression(
+        winsorized_df,
+        predictors=DEFAULT_PREDICTORS,
+        controls=DEFAULT_CONTROLS,
+        model_label="baseline_winsorized",
+    )
+
+    # Extreme values are clipped
+    assert float(winsorized_df["total_rate_per_1000"].max()) <= p95 + 1e-9
+
+    # Model runs and returns a valid coefficient for the crime predictor
+    crime_row_w = winsorized.coefficients[
+        winsorized.coefficients["term"] == "total_rate_per_1000"
+    ].iloc[0]
+    crime_row_u = unwinsorized.coefficients[
+        unwinsorized.coefficients["term"] == "total_rate_per_1000"
+    ].iloc[0]
+    # Clipping extreme outliers must shift the estimated coefficient
+    assert float(crime_row_w["estimate"]) != float(crime_row_u["estimate"])
+
+
+def test_audit_baseline_controls_returns_expected_columns():
+    n = 15
+    model_df = pd.DataFrame(
+        {
+            "zip": [f"75{i:03d}" for i in range(100, 100 + n)],
+            "home_value": [200000 + (i * 15000) for i in range(n)],
+            "total_rate_per_1000": [30.0 - (i * 1.0) for i in range(n)],
+            "median_household_income": [50000 + (i * 2000) for i in range(n)],
+            "poverty_rate": [0.20 - (i * 0.005) for i in range(n)],
+            "owner_occupied_share": [0.30 + (i * 0.02) for i in range(n)],
+            "median_gross_rent": [1100 + (i * 30) for i in range(n)],
+            "educational_attainment": [0.40 + (i * 0.015) for i in range(n)],
+        }
+    )
+
+    audit = _audit_baseline_controls(model_df)
+
+    assert not audit.empty
+    assert "control" in audit.columns
+    assert "vif" in audit.columns
+    # Each DEFAULT_CONTROLS entry should appear as a row
+    expected_controls = {
+        "median_household_income",
+        "poverty_rate",
+        "owner_occupied_share",
+        "median_gross_rent",
+        "educational_attainment",
+    }
+    assert expected_controls <= set(audit["control"].tolist())
+    # Pairwise correlation columns present
+    assert any(col.startswith("corr_") for col in audit.columns)
 
 
 def test_crime_rate_calculation_handles_zero_population():

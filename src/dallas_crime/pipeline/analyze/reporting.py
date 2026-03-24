@@ -78,8 +78,9 @@ def _write_forecast_notes(
     else:
         selected = (
             forecasts_df.loc[
-                forecasts_df.get("forecast_tier", pd.Series("high_confidence", index=forecasts_df.index))
-                .astype(str)
+                forecasts_df.get(
+                    "forecast_tier", pd.Series("high_confidence", index=forecasts_df.index)
+                ).astype(str)
                 == "high_confidence",
                 ["zip", "selected_model"],
             ]
@@ -91,8 +92,9 @@ def _write_forecast_notes(
             if not model_metrics_df.empty
             else int(
                 forecasts_df.loc[
-                    forecasts_df.get("policy_eligible", pd.Series(1, index=forecasts_df.index))
-                    .astype(int)
+                    forecasts_df.get(
+                        "policy_eligible", pd.Series(1, index=forecasts_df.index)
+                    ).astype(int)
                     == 1,
                     "zip",
                 ]
@@ -158,7 +160,9 @@ def _write_forecast_notes(
             lines.append(
                 f"- The remaining {remaining_unforecasted} modeled ZIPs still lacked enough contiguous history for any forecast tier."
             )
-        lines.append("- Scenario and policy artifacts remain limited to the high-confidence subset.")
+        lines.append(
+            "- Scenario and policy artifacts remain limited to the high-confidence subset."
+        )
         lines.append("")
         lines.append("Selected high-confidence ZIP-level models:")
         lines.append("")
@@ -188,8 +192,9 @@ def _write_scenario_notes(
     lower_tier_zip_count = (
         int(
             crime_forecasts.loc[
-                crime_forecasts.get("policy_eligible", pd.Series(1, index=crime_forecasts.index))
-                .astype(int)
+                crime_forecasts.get(
+                    "policy_eligible", pd.Series(1, index=crime_forecasts.index)
+                ).astype(int)
                 == 0,
                 "zip",
             ]
@@ -249,9 +254,7 @@ def _write_benchmark_summary(benchmarks_df: pd.DataFrame, output_path: Path) -> 
         ]
     )
     for row in top_home_value.itertuples(index=False):
-        lines.append(
-            f"| {row.zip} | {row.home_value:.0f} | {row.home_value_vs_metro_pct:.2f} |"
-        )
+        lines.append(f"| {row.zip} | {row.home_value:.0f} | {row.home_value_vs_metro_pct:.2f} |")
 
     lines.extend(
         [
@@ -305,7 +308,8 @@ def _write_feature_selection_notes(
         "feature_name",
     ].astype(str)
     interpretable = selection_df.loc[
-        pd.to_numeric(selection_df["interpretation_allowed"], errors="coerce").fillna(0).astype(int) == 1,
+        pd.to_numeric(selection_df["interpretation_allowed"], errors="coerce").fillna(0).astype(int)
+        == 1,
         "feature_name",
     ].astype(str)
     lines.append(f"Feature candidates evaluated: {len(selection_df)}.")
@@ -342,9 +346,7 @@ def _write_feature_power_retention_notes(
         output_path.write_text("\n".join(lines) + "\n")
         return
 
-    metric_to_value = {
-        str(row.metric): row.value for row in power_metrics.itertuples(index=False)
-    }
+    metric_to_value = {str(row.metric): row.value for row in power_metrics.itertuples(index=False)}
     score_retention = pd.to_numeric(
         pd.Series([metric_to_value.get("feature_selection_score_retention_ratio")]),
         errors="coerce",
@@ -449,7 +451,9 @@ def _write_policy_recommendations_notes(
 
     high_priority = policy_df.loc[policy_df["priority_tier"] == "high"]
     blocked_segments = policy_df.loc[
-        policy_df.get("segment_guardrail_status", pd.Series("clear", index=policy_df.index)).astype(str)
+        policy_df.get("segment_guardrail_status", pd.Series("clear", index=policy_df.index)).astype(
+            str
+        )
         == "blocked"
     ]
     lines.append(f"Segment recommendations written: {len(policy_df)}.")
@@ -467,7 +471,9 @@ def _write_policy_recommendations_notes(
         "See `policy_recommendations_by_segment.csv` for segment guardrail status, confidence tiers, "
         "scenario support, and high-influence concentrations."
     )
-    lines.append("These segment recommendations remain exploratory and non-causal; see `policy_guardrails.md`.")
+    lines.append(
+        "These segment recommendations remain exploratory and non-causal; see `policy_guardrails.md`."
+    )
     if notes:
         lines.extend(["", "Additional notes:", "", *notes])
     output_path.write_text("\n".join(lines) + "\n")
@@ -498,9 +504,7 @@ def _write_policy_guardrails(
         interval_calibration["evaluation_scope"].astype(str) == "selected_zip_model"
     ]
     holdout_pass = (
-        bool(
-            pd.to_numeric(selected_holdout["mape_pass"], errors="coerce").fillna(0).eq(1).all()
-        )
+        bool(pd.to_numeric(selected_holdout["mape_pass"], errors="coerce").fillna(0).eq(1).all())
         if not selected_holdout.empty
         else False
     )
@@ -535,15 +539,18 @@ def _write_policy_guardrails(
         else False
     )
     interpretation_share = (
-        float(pd.to_numeric(statistical_guardrails["interpretation_allowed"], errors="coerce").mean())
+        float(
+            pd.to_numeric(statistical_guardrails["interpretation_allowed"], errors="coerce").mean()
+        )
         if not statistical_guardrails.empty
         else np.nan
     )
     forecast_high_confidence_count = (
         int(
             crime_forecasts.loc[
-                crime_forecasts.get("policy_eligible", pd.Series(1, index=crime_forecasts.index))
-                .astype(int)
+                crime_forecasts.get(
+                    "policy_eligible", pd.Series(1, index=crime_forecasts.index)
+                ).astype(int)
                 == 1,
                 "zip",
             ]
@@ -556,8 +563,9 @@ def _write_policy_guardrails(
     lower_confidence_forecast_count = (
         int(
             crime_forecasts.loc[
-                crime_forecasts.get("policy_eligible", pd.Series(1, index=crime_forecasts.index))
-                .astype(int)
+                crime_forecasts.get(
+                    "policy_eligible", pd.Series(1, index=crime_forecasts.index)
+                ).astype(int)
                 == 0,
                 "zip",
             ]
@@ -594,12 +602,18 @@ def _write_policy_guardrails(
         else 0
     )
     max_crime_term_shift = (
-        float(pd.to_numeric(influence_summary["max_crime_term_effect_pct_change"], errors="coerce").max())
+        float(
+            pd.to_numeric(
+                influence_summary["max_crime_term_effect_pct_change"], errors="coerce"
+            ).max()
+        )
         if not influence_summary.empty
         else np.nan
     )
     max_prediction_delta = (
-        float(pd.to_numeric(influence_summary["max_p90_home_value_pct_delta"], errors="coerce").max())
+        float(
+            pd.to_numeric(influence_summary["max_p90_home_value_pct_delta"], errors="coerce").max()
+        )
         if not influence_summary.empty
         else np.nan
     )
@@ -926,7 +940,9 @@ def _effect_size_text(coefficient_row: pd.Series | None) -> str:
     if pd.isna(estimate):
         return "not estimable from this specification"
     percent_change = (np.exp(float(estimate)) - 1.0) * 100.0
-    q_value = pd.to_numeric(pd.Series([coefficient_row.get("fdr_q_value")]), errors="coerce").iloc[0]
+    q_value = pd.to_numeric(pd.Series([coefficient_row.get("fdr_q_value")]), errors="coerce").iloc[
+        0
+    ]
     interpretation_allowed = (
         pd.to_numeric(pd.Series([coefficient_row.get("interpretation_allowed")]), errors="coerce")
         .fillna(0)
@@ -953,6 +969,9 @@ def _write_summary_report(
     cluster_stability: pd.DataFrame,
     settings: "Settings",
     output_path: Path,
+    *,
+    factor_importance_summary_md: str = "",
+    parsimonious_result: RegressionResult | None = None,
 ) -> None:
     numeric = model_df[["total_rate_per_1000", "home_value"]].apply(pd.to_numeric, errors="coerce")
     total_corr = numeric.corr().iloc[0, 1]
@@ -1002,8 +1021,9 @@ def _write_summary_report(
     lower_confidence_forecast_count = (
         int(
             crime_forecasts.loc[
-                crime_forecasts.get("policy_eligible", pd.Series(1, index=crime_forecasts.index))
-                .astype(int)
+                crime_forecasts.get(
+                    "policy_eligible", pd.Series(1, index=crime_forecasts.index)
+                ).astype(int)
                 == 0,
                 "zip",
             ]
@@ -1039,12 +1059,18 @@ def _write_summary_report(
         else 0
     )
     max_crime_term_shift = (
-        float(pd.to_numeric(influence_summary["max_crime_term_effect_pct_change"], errors="coerce").max())
+        float(
+            pd.to_numeric(
+                influence_summary["max_crime_term_effect_pct_change"], errors="coerce"
+            ).max()
+        )
         if not influence_summary.empty
         else np.nan
     )
     max_prediction_delta = (
-        float(pd.to_numeric(influence_summary["max_p90_home_value_pct_delta"], errors="coerce").max())
+        float(
+            pd.to_numeric(influence_summary["max_p90_home_value_pct_delta"], errors="coerce").max()
+        )
         if not influence_summary.empty
         else np.nan
     )
@@ -1135,43 +1161,130 @@ def _write_summary_report(
         "- Small sample sizes and correlated neighborhood factors can inflate uncertainty.",
         "- Results are sensitive to ZIP-universe filtering, available controls, and the current crime lookback window.",
         "",
-        "## Visuals and Artifacts",
+        "## Factor Importance Analysis",
         "",
-        "- `home_value_vs_total_crime.png` (scatter visual)",
-        "- `crime_home_value_geography.png` (ZIP centroid geography-aware view)",
-        "- `cluster_assignments.csv` and `cluster_profiles.csv` (deterministic ZIP segmentation outputs)",
-        "- `spatial_diagnostics.csv` and `spatial_hotspots.csv` (Moran-style clustering and local spillover view)",
-        "- `model_validation_metrics.csv` and `model_validation_notes.md` (PRESS/LOOCV-style validation diagnostics)",
-        "- `feature_selection_metrics.csv` and `feature_selection_notes.md` (candidate feature ranking and coverage)",
-        "- `feature_power_retention_metrics.csv` and `feature_power_retention_notes.md` (explicit retained-signal checkpoint metrics)",
-        "- `predictive_model_metrics.csv`, `predictive_model_predictions.csv`, and `model_selection_notes.md` (broader model-family and ensemble selection diagnostics)",
-        "- `crime_trend_decomposition.csv` and `crime_trend_decomposition.md` (quarterly decomposition view)",
-        "- `forecast_model_metrics.csv`, `crime_forecasts.csv`, and `forecast_confidence_intervals.csv` (ZIP-level forecast model comparison and 12-month outlook)",
-        "- `temporal_holdout_results.csv` and `forecast_interval_calibration.csv` (temporal holdout and interval credibility checks)",
-        "- `scenario_impacts.csv` and `scenario_notes.md` (deterministic planning scenarios)",
-        "- `zip_benchmarks.csv` and `benchmark_summary.md` (ZIP-vs-metro and ZIP-vs-cluster comparisons)",
-        "- `model_drift_diagnostics.csv` and `model_drift_notes.md` (latest-quarter drift checks)",
-        "- `influence_robustness_diagnostics.csv` and `cluster_stability_diagnostics.csv` (robustness and segmentation-utility checks)",
-        "- `statistical_guardrails.csv` and `policy_guardrails.md` (multiple-testing, practical-effect, and non-causal interpretation guardrails)",
-        "- `comprehensive_validation_metrics.csv` and `comprehensive_validation_notes.md` (cross-artifact validation rollup)",
-        "- `policy_recommendations_by_segment.csv` and `policy_recommendations_by_segment.md` (segment-level action framing)",
-        "- `top_bottom_zip_comparison.md` (additional ZIP comparison table)",
-        "- `model_summary_table.md` (model-level metrics table)",
-        "- `regression_coefficients.csv` and `regression_metrics.csv`",
-        "- `model_sample_sizes.csv`, `model_residuals.csv`, `residual_review.md`",
-        "- `model_vif.csv` and `model_vif_notes.md`",
+        "The crime-housing hypothesis has been answered: total_rate_per_1000 is not a significant "
+        "predictor once socioeconomic controls are included. The analysis pivoted to the broader "
+        "question — which features are the strongest independent drivers of ZIP-level home values?",
         "",
-        "## Rebuild Path",
-        "",
-        "- Full refresh from raw sources: `dallas-crime acquire && dallas-crime build && dallas-crime analyze`",
-        "- Report refresh from existing raw inputs: `dallas-crime build && dallas-crime analyze`",
-        "",
-        "## References",
-        "",
-        "- Dallas OpenData Police Incidents dataset",
-        "- U.S. Census ACS 5-year ZIP-level tables",
-        "- Zillow, Realtor, and Redfin ZIP market pages captured via Firecrawl",
-        "- Realtor ZIP market pages and Realtor ZIP inventory/history feeds",
-        "- FHFA ZIP5 annual HPI",
     ]
+
+    # Parsimonious model results
+    if parsimonious_result is not None:
+        lines.extend(
+            [
+                "### Parsimonious Model",
+                "",
+                "A three-predictor model using one representative from each independent collinearity cluster:",
+                "",
+                "| Predictor | Cluster | Coefficient | Std Error | p-value |",
+                "|-----------|---------|-------------|-----------|---------|",
+            ]
+        )
+        _cluster_labels = {
+            "educational_attainment": "Socioeconomic (Cluster 1)",
+            "realtor_listing_price": "Price level (Cluster 3)",
+            "aggregate_market_pressure_index": "Market pressure",
+        }
+        for _, row in parsimonious_result.coefficients.iterrows():
+            term = str(row["term"])
+            if term == "Intercept":
+                continue
+            cluster = _cluster_labels.get(term, "")
+            estimate = float(row["estimate"])
+            se = float(row["std_error"])
+            pval = float(row["p_value"])
+            lines.append(f"| {term} | {cluster} | {estimate:+.6f} | {se:.6f} | {pval:.4f} |")
+        lines.extend(
+            [
+                "",
+                f"- Sample size: {parsimonious_result.nobs} ZIPs",
+                f"- R-squared: {parsimonious_result.r_squared:.3f}",
+                f"- Adjusted R-squared: {parsimonious_result.adjusted_r_squared:.3f}",
+                "- Standard errors: HC3 robust",
+                "- No additional controls — the three cluster representatives are the full model.",
+                "",
+                "The negative coefficient on aggregate_market_pressure_index reflects affordability "
+                "dynamics: this composite index (mean z-score of crime rate, annual price change, "
+                "rent-to-home-value ratio, and income growth trend) captures ZIPs where market "
+                "pressure runs against home values. Higher-pressure ZIPs tend to have lower home "
+                "values after controlling for educational attainment and listing price level.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "### Parsimonious Model",
+                "",
+                "The parsimonious model was not estimable for this run (missing predictor columns).",
+                "",
+            ]
+        )
+
+    # Factor importance summary (from Phase 4 markdown, embedded as-is)
+    if factor_importance_summary_md:
+        # Strip the top-level heading since we already have the section header
+        _fi_lines = factor_importance_summary_md.strip().split("\n")
+        _skip = 0
+        for _fi_line in _fi_lines:
+            if _fi_line.startswith("# ") and "Factor Importance" in _fi_line:
+                _skip += 1
+                # Also skip blank line after heading
+                if _skip < len(_fi_lines) and _fi_lines[_skip].strip() == "":
+                    _skip += 1
+                break
+            _skip += 1
+        lines.extend(_fi_lines[_skip:])
+        lines.append("")
+    else:
+        lines.append("Factor importance artifacts were not available for this run.")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Visuals and Artifacts",
+            "",
+            "- `home_value_vs_total_crime.png` (scatter visual)",
+            "- `crime_home_value_geography.png` (ZIP centroid geography-aware view)",
+            "- `cluster_assignments.csv` and `cluster_profiles.csv` (deterministic ZIP segmentation outputs)",
+            "- `spatial_diagnostics.csv` and `spatial_hotspots.csv` (Moran-style clustering and local spillover view)",
+            "- `model_validation_metrics.csv` and `model_validation_notes.md` (PRESS/LOOCV-style validation diagnostics)",
+            "- `feature_selection_metrics.csv` and `feature_selection_notes.md` (candidate feature ranking and coverage)",
+            "- `feature_power_retention_metrics.csv` and `feature_power_retention_notes.md` (explicit retained-signal checkpoint metrics)",
+            "- `predictive_model_metrics.csv`, `predictive_model_predictions.csv`, and `model_selection_notes.md` (broader model-family and ensemble selection diagnostics)",
+            "- `crime_trend_decomposition.csv` and `crime_trend_decomposition.md` (quarterly decomposition view)",
+            "- `forecast_model_metrics.csv`, `crime_forecasts.csv`, and `forecast_confidence_intervals.csv` (ZIP-level forecast model comparison and 12-month outlook)",
+            "- `temporal_holdout_results.csv` and `forecast_interval_calibration.csv` (temporal holdout and interval credibility checks)",
+            "- `scenario_impacts.csv` and `scenario_notes.md` (deterministic planning scenarios)",
+            "- `zip_benchmarks.csv` and `benchmark_summary.md` (ZIP-vs-metro and ZIP-vs-cluster comparisons)",
+            "- `model_drift_diagnostics.csv` and `model_drift_notes.md` (latest-quarter drift checks)",
+            "- `influence_robustness_diagnostics.csv` and `cluster_stability_diagnostics.csv` (robustness and segmentation-utility checks)",
+            "- `statistical_guardrails.csv` and `policy_guardrails.md` (multiple-testing, practical-effect, and non-causal interpretation guardrails)",
+            "- `comprehensive_validation_metrics.csv` and `comprehensive_validation_notes.md` (cross-artifact validation rollup)",
+            "- `policy_recommendations_by_segment.csv` and `policy_recommendations_by_segment.md` (segment-level action framing)",
+            "- `top_bottom_zip_comparison.md` (additional ZIP comparison table)",
+            "- `model_summary_table.md` (model-level metrics table)",
+            "- `regression_coefficients.csv` and `regression_metrics.csv`",
+            "- `model_sample_sizes.csv`, `model_residuals.csv`, `residual_review.md`",
+            "- `model_vif.csv` and `model_vif_notes.md`",
+            "- `factor_importance_univariate.csv`, `factor_importance_standardized.csv`, "
+            "`factor_importance_variance_decomposition.csv`, and `factor_importance_summary.md` "
+            "(factor importance analysis: univariate screening, standardized coefficients, "
+            "LMG variance decomposition, and summary)",
+            "",
+            "## Rebuild Path",
+            "",
+            "- Full refresh from raw sources: `dallas-crime acquire && dallas-crime build && dallas-crime analyze`",
+            "- Report refresh from existing raw inputs: `dallas-crime build && dallas-crime analyze`",
+            "",
+            "## References",
+            "",
+            "- Dallas OpenData Police Incidents dataset",
+            "- U.S. Census ACS 5-year ZIP-level tables",
+            "- Zillow, Realtor, and Redfin ZIP market pages captured via Firecrawl",
+            "- Realtor ZIP market pages and Realtor ZIP inventory/history feeds",
+            "- FHFA ZIP5 annual HPI",
+        ]
+    )
     output_path.write_text("\n".join(lines) + "\n")

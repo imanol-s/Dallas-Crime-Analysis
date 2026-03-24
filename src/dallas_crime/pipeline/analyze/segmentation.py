@@ -59,7 +59,9 @@ def _iter_segmentation_feature_sets(available_features: list[str]) -> list[list[
     return feature_sets
 
 
-def _deterministic_kmeans(values: np.ndarray, *, k: int, max_iter: int = 30) -> tuple[np.ndarray, np.ndarray]:
+def _deterministic_kmeans(
+    values: np.ndarray, *, k: int, max_iter: int = 30
+) -> tuple[np.ndarray, np.ndarray]:
     row_order = np.argsort(values.sum(axis=1), kind="mergesort")
     anchors = np.linspace(0, len(row_order) - 1, num=k, dtype=int)
     centroids = values[row_order[anchors]].copy()
@@ -228,9 +230,7 @@ def _select_segmentation_solution(
             float(solution["leave_one_feature_out_mean_ari"])
             if pd.notna(solution["leave_one_feature_out_mean_ari"])
             else float("-inf"),
-            float(solution["silhouette"])
-            if pd.notna(solution["silhouette"])
-            else float("-inf"),
+            float(solution["silhouette"]) if pd.notna(solution["silhouette"]) else float("-inf"),
             int(solution["feature_count"]),
             int(solution["mode_priority"]),
             -int(solution["selected_k"]),
@@ -327,7 +327,14 @@ def _build_segmentation_artifacts(model_df: pd.DataFrame) -> tuple[pd.DataFrame,
 
     profiles = pd.DataFrame.from_records(
         profile_rows,
-        columns=["domain", "cluster_label", "zip_count", "silhouette_score", "feature", "mean_value"],
+        columns=[
+            "domain",
+            "cluster_label",
+            "zip_count",
+            "silhouette_score",
+            "feature",
+            "mean_value",
+        ],
     )
     if not profiles.empty:
         profiles = profiles.sort_values(

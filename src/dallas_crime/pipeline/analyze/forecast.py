@@ -115,7 +115,9 @@ def _prepare_temporal_analysis_inputs(
     return summary.sort_values("zip", ignore_index=True), trailing_series, notes
 
 
-def _walk_forward_forecast_metrics(history: np.ndarray, *, model_name: str) -> dict[str, float] | None:
+def _walk_forward_forecast_metrics(
+    history: np.ndarray, *, model_name: str
+) -> dict[str, float] | None:
     errors: list[float] = []
     absolute_errors: list[float] = []
     apes: list[float] = []
@@ -155,13 +157,17 @@ def _forecast_interval_bounds(
 ) -> tuple[float, float]:
     z_score = 1.2816 if interval_level == 80 else 1.96
     clean_history = pd.Series(history, dtype=float).dropna().to_numpy(dtype=float)
-    history_scale = float(np.quantile(clean_history, 0.75)) if clean_history.size else abs(prediction)
+    history_scale = (
+        float(np.quantile(clean_history, 0.75)) if clean_history.size else abs(prediction)
+    )
     history_max = float(np.max(clean_history)) if clean_history.size else abs(prediction)
     upper_cap = max(history_max * 2.0, abs(prediction) * 20.0, prediction + 0.01)
     base_scale = max(error_scale, history_scale * 0.05, abs(prediction) * 0.05, 0.01)
     raw_width = float(z_score * base_scale * np.sqrt(horizon))
     capped_width = min(raw_width, upper_cap - prediction)
-    floor_width = min(max(history_scale * 0.02, abs(prediction) * 0.02, 0.01), upper_cap - prediction)
+    floor_width = min(
+        max(history_scale * 0.02, abs(prediction) * 0.02, 0.01), upper_cap - prediction
+    )
     width = max(capped_width, floor_width)
     lower_bound = max(float(prediction) - width, 0.0)
     upper_bound = min(float(prediction) + width, upper_cap)
@@ -207,9 +213,7 @@ def _select_forecast_model(
     if not zip_metrics.empty:
         ranked = zip_metrics.copy()
         if eligible_models:
-            ranked = ranked.loc[
-                ranked["model_name"].astype(str).isin(set(eligible_models))
-            ].copy()
+            ranked = ranked.loc[ranked["model_name"].astype(str).isin(set(eligible_models))].copy()
         if ranked.empty:
             ranked = zip_metrics.copy()
         ranked["fallback_rank"] = ranked["model_name"].map(FORECAST_MODEL_FALLBACK_ORDER.index)
@@ -264,16 +268,13 @@ def _build_trend_decomposition_artifacts(
 
     series_frames: list[tuple[str, str | None, pd.Series]] = []
     metro_series = (
-        panel.groupby("period_start")["total_rate_per_1000"]
-        .mean()
-        .sort_index(kind="mergesort")
+        panel.groupby("period_start")["total_rate_per_1000"].mean().sort_index(kind="mergesort")
     )
     series_frames.append(("metro", None, metro_series))
     for zip_code, zip_frame in panel.groupby("zip", sort=True):
-        zip_series = (
-            zip_frame.sort_values("period_start", kind="mergesort")
-            .set_index("period_start")["total_rate_per_1000"]
-        )
+        zip_series = zip_frame.sort_values("period_start", kind="mergesort").set_index(
+            "period_start"
+        )["total_rate_per_1000"]
         series_frames.append(("zip", str(zip_code), zip_series))
 
     rows: list[dict[str, object]] = []
@@ -305,9 +306,7 @@ def _build_trend_decomposition_artifacts(
                     "trend_total_rate_per_1000": float(decomposition.trend.loc[period_start])
                     if pd.notna(decomposition.trend.loc[period_start])
                     else np.nan,
-                    "seasonal_total_rate_per_1000": float(
-                        decomposition.seasonal.loc[period_start]
-                    )
+                    "seasonal_total_rate_per_1000": float(decomposition.seasonal.loc[period_start])
                     if pd.notna(decomposition.seasonal.loc[period_start])
                     else np.nan,
                     "residual_total_rate_per_1000": float(decomposition.resid.loc[period_start])
@@ -435,9 +434,7 @@ def _build_forecast_artifacts(
             holdout_lookup = {
                 str(row.model_name): {
                     "temporal_holdout_mape": float(row.mape) if pd.notna(row.mape) else np.nan,
-                    "temporal_holdout_pass": int(row.mape_pass)
-                    if pd.notna(row.mape_pass)
-                    else 0,
+                    "temporal_holdout_pass": int(row.mape_pass) if pd.notna(row.mape_pass) else 0,
                     "temporal_holdout_rank": float(row.temporal_holdout_rank)
                     if pd.notna(row.temporal_holdout_rank)
                     else np.nan,
@@ -541,7 +538,9 @@ def _build_forecast_artifacts(
                 "zip_count": int(model_metrics["zip"].nunique()),
                 "mae": float(model_metrics["mae"].mean()),
                 "rmse": float(model_metrics["rmse"].mean()),
-                "mape": float(model_metrics["mape"].mean()) if model_metrics["mape"].notna().any() else np.nan,
+                "mape": float(model_metrics["mape"].mean())
+                if model_metrics["mape"].notna().any()
+                else np.nan,
                 "selected_zip_count": 0,
                 "eligible_zip_count": int(len(eligible)),
                 "gated_out_zip_count": int(len(temporal_summary) - len(eligible)),
@@ -564,7 +563,9 @@ def _build_forecast_artifacts(
             float(model_metrics["p75_absolute_error"].mean())
             if model_metrics["p75_absolute_error"].notna().any()
             else 0.0,
-            float(model_metrics["mae"].mean()) * 0.75 if model_metrics["mae"].notna().any() else 0.0,
+            float(model_metrics["mae"].mean()) * 0.75
+            if model_metrics["mae"].notna().any()
+            else 0.0,
             0.01,
         )
 
@@ -610,7 +611,9 @@ def _build_forecast_artifacts(
             allowed_models=allowed_models or None,
         )
         if selected_model is None:
-            notes.append(f"ZIP {zip_code}: no forecast model was applicable for the available history.")
+            notes.append(
+                f"ZIP {zip_code}: no forecast model was applicable for the available history."
+            )
             continue
 
         selected_models[zip_code] = selected_model
@@ -719,7 +722,9 @@ def _build_forecast_artifacts(
     metrics_df = pd.DataFrame.from_records(overall_metric_rows, columns=metric_columns)
     if selected_models:
         selected_counts = pd.Series(selected_models).value_counts()
-        metrics_df["selected_zip_count"] = metrics_df["model_name"].map(selected_counts).fillna(0).astype(int)
+        metrics_df["selected_zip_count"] = (
+            metrics_df["model_name"].map(selected_counts).fillna(0).astype(int)
+        )
     if metrics_df["rmse"].notna().any():
         metrics_df["rmse_rank"] = metrics_df["rmse"].rank(method="dense", na_option="bottom")
         metrics_df = metrics_df.sort_values(["rmse_rank", "model_name"], kind="mergesort").drop(
@@ -803,7 +808,9 @@ def _build_temporal_holdout_artifacts(
     holdout_stats: dict[tuple[str, str], dict[str, object]] = {}
     calibration_stats: dict[tuple[str, str, int], dict[str, object]] = {}
 
-    def _update_holdout(scope: str, model_name: str, zip_code: str, error: float, actual: float) -> None:
+    def _update_holdout(
+        scope: str, model_name: str, zip_code: str, error: float, actual: float
+    ) -> None:
         stats = holdout_stats.setdefault(
             (scope, model_name),
             {"zips": set(), "errors": [], "abs_errors": [], "apes": []},
@@ -924,6 +931,7 @@ def _build_temporal_holdout_artifacts(
                     )
 
     mape_threshold = 20.0
+
     def _holdout_rows_for_scope(
         *,
         scope: str,
@@ -958,14 +966,18 @@ def _build_temporal_holdout_artifacts(
         return rows
 
     candidate_holdout_rows = _holdout_rows_for_scope(scope="candidate_model")
-    candidate_holdout_df = pd.DataFrame.from_records(candidate_holdout_rows, columns=holdout_columns)
+    candidate_holdout_df = pd.DataFrame.from_records(
+        candidate_holdout_rows, columns=holdout_columns
+    )
     allowed_models = tuple(
         model_name
         for model_name in FORECAST_MODELS
         if model_name
         in set(
             candidate_holdout_df.loc[
-                pd.to_numeric(candidate_holdout_df["mape_pass"], errors="coerce").fillna(0).astype(int)
+                pd.to_numeric(candidate_holdout_df["mape_pass"], errors="coerce")
+                .fillna(0)
+                .astype(int)
                 == 1,
                 "model_name",
             ]
@@ -1049,16 +1061,12 @@ def _build_temporal_holdout_artifacts(
         equal_share = _safe_ratio(stats["equal_bound_count"], stats["count"])
         extreme_share = _safe_ratio(stats["extreme_upper_ratio_count"], stats["count"])
         coverage_pass = pd.notna(coverage_gap) and coverage_gap <= 0.10
-        shape_pass = (
-            stats["equal_bound_count"] == 0 and stats["extreme_upper_ratio_count"] == 0
-        )
+        shape_pass = stats["equal_bound_count"] == 0 and stats["extreme_upper_ratio_count"] == 0
         calibration_rows.append(
             {
                 "evaluation_scope": scope,
                 "model_name": model_name,
-                "selected_family": (
-                    model_name if scope == "candidate_model" else selected_family
-                ),
+                "selected_family": (model_name if scope == "candidate_model" else selected_family),
                 "interval_level": interval_level,
                 "eligible_zip_count": int(len(eligible)),
                 "zip_count": int(len(stats["zips"])),
@@ -1067,8 +1075,12 @@ def _build_temporal_holdout_artifacts(
                 "empirical_coverage": empirical_coverage,
                 "target_coverage": target_coverage,
                 "coverage_gap": coverage_gap,
-                "mean_interval_width": float(np.mean(stats["widths"])) if stats["widths"] else np.nan,
-                "median_interval_width": float(np.median(stats["widths"])) if stats["widths"] else np.nan,
+                "mean_interval_width": float(np.mean(stats["widths"]))
+                if stats["widths"]
+                else np.nan,
+                "median_interval_width": float(np.median(stats["widths"]))
+                if stats["widths"]
+                else np.nan,
                 "equal_bound_count": int(stats["equal_bound_count"]),
                 "equal_bound_share": equal_share,
                 "extreme_upper_ratio_count": int(stats["extreme_upper_ratio_count"]),
@@ -1081,7 +1093,9 @@ def _build_temporal_holdout_artifacts(
         )
 
     if not holdout_rows and not notes:
-        notes.append("Temporal holdout evaluation did not produce any eligible ZIP-model comparisons.")
+        notes.append(
+            "Temporal holdout evaluation did not produce any eligible ZIP-model comparisons."
+        )
     else:
         notes.append(
             f"Temporal holdout evaluated the last {TEMPORAL_HOLDOUT_QUARTERS} quarters for "
@@ -1139,7 +1153,9 @@ def _build_interval_shape_artifacts(forecast_intervals: pd.DataFrame) -> pd.Data
     frame["upper_bound"] = pd.to_numeric(frame["upper_bound"], errors="coerce")
     grouped_rows: list[dict[str, object]] = []
     for interval_level, level_frame in frame.groupby("interval_level", dropna=True):
-        selected_families = sorted(level_frame["selected_model"].dropna().astype(str).unique().tolist())
+        selected_families = sorted(
+            level_frame["selected_model"].dropna().astype(str).unique().tolist()
+        )
         ratio = np.where(
             pd.to_numeric(level_frame["forecast_value"], errors="coerce") > 0,
             pd.to_numeric(level_frame["upper_bound"], errors="coerce")
@@ -1159,9 +1175,7 @@ def _build_interval_shape_artifacts(forecast_intervals: pd.DataFrame) -> pd.Data
                 "evaluation_scope": "forecast_output_shape",
                 "model_name": "selected_zip_model",
                 "selected_family": (
-                    selected_families[0]
-                    if len(selected_families) == 1
-                    else "mixed_selected_models"
+                    selected_families[0] if len(selected_families) == 1 else "mixed_selected_models"
                 ),
                 "interval_level": int(interval_level),
                 "eligible_zip_count": int(level_frame["zip"].astype(str).nunique()),
@@ -1339,7 +1353,14 @@ def _build_benchmark_artifacts(
         ].mean()
         frame["violent_rate_vs_cluster_pct"] = frame.apply(
             lambda row: (
-                ((row["violent_rate_per_1000"] / cluster_means.loc[row["crime_cluster"], "violent_rate_per_1000"]) - 1.0) * 100.0
+                (
+                    (
+                        row["violent_rate_per_1000"]
+                        / cluster_means.loc[row["crime_cluster"], "violent_rate_per_1000"]
+                    )
+                    - 1.0
+                )
+                * 100.0
                 if pd.notna(row["crime_cluster"])
                 and row["crime_cluster"] in cluster_means.index
                 and pd.notna(cluster_means.loc[row["crime_cluster"], "violent_rate_per_1000"])
@@ -1350,7 +1371,14 @@ def _build_benchmark_artifacts(
         )
         frame["property_rate_vs_cluster_pct"] = frame.apply(
             lambda row: (
-                ((row["property_rate_per_1000"] / cluster_means.loc[row["crime_cluster"], "property_rate_per_1000"]) - 1.0) * 100.0
+                (
+                    (
+                        row["property_rate_per_1000"]
+                        / cluster_means.loc[row["crime_cluster"], "property_rate_per_1000"]
+                    )
+                    - 1.0
+                )
+                * 100.0
                 if pd.notna(row["crime_cluster"])
                 and row["crime_cluster"] in cluster_means.index
                 and pd.notna(cluster_means.loc[row["crime_cluster"], "property_rate_per_1000"])
@@ -1363,12 +1391,10 @@ def _build_benchmark_artifacts(
         frame["violent_rate_vs_cluster_pct"] = np.nan
         frame["property_rate_vs_cluster_pct"] = np.nan
 
-    frame["is_top_quartile_home_value"] = (
-        frame["home_value_percentile"] >= 0.75
-    ).astype(int)
-    frame["is_top_quartile_crime_rate"] = (
-        frame["total_rate_per_1000_percentile"] >= 0.75
-    ).astype(int)
+    frame["is_top_quartile_home_value"] = (frame["home_value_percentile"] >= 0.75).astype(int)
+    frame["is_top_quartile_crime_rate"] = (frame["total_rate_per_1000_percentile"] >= 0.75).astype(
+        int
+    )
     frame["is_bottom_quartile_income"] = (
         frame["median_household_income_percentile"] <= 0.25
     ).astype(int)
@@ -1428,10 +1454,9 @@ def _build_drift_artifacts(
         metro_panel.append(
             ordered[["period_start", "total_rate_per_1000"]].assign(zip=zip_code).copy()
         )
-        zip_series = (
-            ordered.sort_values("period_start", kind="mergesort")
-            .set_index("period_start")["total_rate_per_1000"]
-        )
+        zip_series = ordered.sort_values("period_start", kind="mergesort").set_index(
+            "period_start"
+        )["total_rate_per_1000"]
         entities.append(("zip", zip_code, zip_series))
     if not metro_panel:
         notes.append("No eligible ZIP panels were available after drift gating.")
@@ -1478,14 +1503,10 @@ def _build_drift_artifacts(
             baseline_mean = float(baseline.mean())
             baseline_std = float(baseline.std(ddof=0))
             z_score = (
-                (adjusted_latest - baseline_mean) / baseline_std
-                if baseline_std > 0
-                else np.nan
+                (adjusted_latest - baseline_mean) / baseline_std if baseline_std > 0 else np.nan
             )
             relative_change = (
-                ((adjusted_latest / baseline_mean) - 1.0) * 100.0
-                if baseline_mean > 0
-                else np.nan
+                ((adjusted_latest / baseline_mean) - 1.0) * 100.0 if baseline_mean > 0 else np.nan
             )
             drift_flag = int(
                 (pd.notna(z_score) and abs(z_score) >= 1.5)

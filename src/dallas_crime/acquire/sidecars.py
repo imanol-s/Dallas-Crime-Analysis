@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from dallas_crime.acquire.utils import load_dfw_zip_set, utc_timestamp, write_json_artifact
+from dallas_crime.utils import _coerce_numeric, _safe_divide
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -48,17 +49,6 @@ class SidecarArtifacts:
 
 def _normalize_zip_series(values: pd.Series) -> pd.Series:
     return values.astype("string").str.extract(r"(\d{5})", expand=False)
-
-
-def _coerce_numeric(values: pd.Series) -> pd.Series:
-    return pd.to_numeric(values, errors="coerce")
-
-
-def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    numerator_num = _coerce_numeric(numerator)
-    denominator_num = _coerce_numeric(denominator)
-    result = np.where(denominator_num > 0, numerator_num / denominator_num, np.nan)
-    return pd.Series(result, index=numerator_num.index, dtype="float64")
 
 
 def _scale_unit_interval(values: pd.Series) -> pd.Series:
@@ -158,65 +148,21 @@ def _prepare_census_features(frame: pd.DataFrame) -> pd.DataFrame:
         if column in census.columns:
             census[column] = _coerce_numeric(census[column])
 
-    if "unemployment_rate" not in census.columns:
-        if {"unemployed_count", "labor_force"} <= set(census.columns):
-            census["unemployment_rate"] = _safe_divide(
-                census["unemployed_count"],
-                census["labor_force"],
-            )
-        else:
-            census["unemployment_rate"] = np.nan
-
-    if "poverty_rate" not in census.columns:
-        if {"poverty_count", "poverty_universe"} <= set(census.columns):
-            census["poverty_rate"] = _safe_divide(census["poverty_count"], census["poverty_universe"])
-        else:
-            census["poverty_rate"] = np.nan
-
-    if "owner_occupied_share" not in census.columns:
-        if {"owner_occupied_units", "occupied_housing_units"} <= set(census.columns):
-            census["owner_occupied_share"] = _safe_divide(
-                census["owner_occupied_units"],
-                census["occupied_housing_units"],
-            )
-        else:
-            census["owner_occupied_share"] = np.nan
-
-    if "vacancy_proxy" not in census.columns:
-        if {"vacant_housing_units", "total_housing_units"} <= set(census.columns):
-            census["vacancy_proxy"] = _safe_divide(
-                census["vacant_housing_units"],
-                census["total_housing_units"],
-            )
-        else:
-            census["vacancy_proxy"] = np.nan
-
-    if "educational_attainment" not in census.columns:
-        if {"bachelors_or_higher_count", "education_population_25_plus"} <= set(census.columns):
-            census["educational_attainment"] = _safe_divide(
-                census["bachelors_or_higher_count"],
-                census["education_population_25_plus"],
-            )
-        else:
-            census["educational_attainment"] = np.nan
-
-    if "public_assistance_share" not in census.columns:
-        if {"households_public_assistance", "households_total"} <= set(census.columns):
-            census["public_assistance_share"] = _safe_divide(
-                census["households_public_assistance"],
-                census["households_total"],
-            )
-        else:
-            census["public_assistance_share"] = np.nan
-
-    if "transit_commute_share" not in census.columns:
-        if {"public_transit_commuters", "total_commuters"} <= set(census.columns):
-            census["transit_commute_share"] = _safe_divide(
-                census["public_transit_commuters"],
-                census["total_commuters"],
-            )
-        else:
-            census["transit_commute_share"] = np.nan
+    _DERIVED_CENSUS_FEATURES = (
+        ("unemployment_rate", "unemployed_count", "labor_force"),
+        ("poverty_rate", "poverty_count", "poverty_universe"),
+        ("owner_occupied_share", "owner_occupied_units", "occupied_housing_units"),
+        ("vacancy_proxy", "vacant_housing_units", "total_housing_units"),
+        ("educational_attainment", "bachelors_or_higher_count", "education_population_25_plus"),
+        ("public_assistance_share", "households_public_assistance", "households_total"),
+        ("transit_commute_share", "public_transit_commuters", "total_commuters"),
+    )
+    for derived_col, numerator_col, denominator_col in _DERIVED_CENSUS_FEATURES:
+        if derived_col not in census.columns:
+            if {numerator_col, denominator_col} <= set(census.columns):
+                census[derived_col] = _safe_divide(census[numerator_col], census[denominator_col])
+            else:
+                census[derived_col] = np.nan
 
     return census
 
@@ -445,11 +391,15 @@ def _build_law_enforcement_sidecar(
 
     frame = frame.merge(crime_summary, on="zip", how="left")
     frame = frame.merge(census_current[["zip", "population"]], on="zip", how="left")
-    frame["violent_rate_per_1000"] = _safe_divide(frame["violent_incidents"], frame["population"]) * 1000
+    frame["violent_rate_per_1000"] = (
+        _safe_divide(frame["violent_incidents"], frame["population"]) * 1000
+    )
 
     arrests = _load_arrest_metrics(settings, zip_universe)
     frame = frame.merge(arrests, on="zip", how="left")
-    frame["arrest_rate_per_1000_3y"] = _safe_divide(frame["arrest_count_3y"], frame["population"]) * 1000
+    frame["arrest_rate_per_1000_3y"] = (
+        _safe_divide(frame["arrest_count_3y"], frame["population"]) * 1000
+    )
 
     violent_inverse = 1 - _scale_unit_interval(frame["violent_rate_per_1000"])
     arrest_scaled = _scale_unit_interval(frame["arrest_rate_per_1000_3y"])

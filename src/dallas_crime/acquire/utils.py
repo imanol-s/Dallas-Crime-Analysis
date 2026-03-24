@@ -15,6 +15,8 @@ from urllib.request import Request, urlopen
 
 T = TypeVar("T")
 
+REQUEST_TIMEOUT_SECONDS = 30
+
 
 class AcquisitionError(RuntimeError):
     """Raised when a source acquisition step fails after retries."""
@@ -74,10 +76,7 @@ def run_with_retry(
             return action()
         except retryable_exceptions as exc:
             if attempt == max_attempts:
-                message = (
-                    f"{operation} failed after {max_attempts} attempt(s). "
-                    f"Last error: {exc}"
-                )
+                message = f"{operation} failed after {max_attempts} attempt(s). Last error: {exc}"
                 if hint:
                     message = f"{message} {hint}"
                 raise AcquisitionError(message) from exc
@@ -121,25 +120,21 @@ def _iter_crosswalk_rows_from_cache(cache_path: Path) -> list[dict[str, object]]
         reader = csv.DictReader(handle)
         for row in reader:
             zip_code = _normalize_zip(
-                row.get("zip")
-                or row.get("GEOID_ZCTA5_20")
-                or row.get("zcta")
-                or row.get("zcta5")
+                row.get("zip") or row.get("GEOID_ZCTA5_20") or row.get("zcta") or row.get("zcta5")
             )
             if zip_code is None:
                 continue
             county_name = str(
-                row.get("county_name")
-                or row.get("NAMELSAD_COUNTY_20")
-                or row.get("county")
-                or ""
+                row.get("county_name") or row.get("NAMELSAD_COUNTY_20") or row.get("county") or ""
             ).strip()
             if not county_name:
                 continue
             if "area_score" in row:
                 area_score = _to_float(row.get("area_score"))
             else:
-                area_score = _to_float(row.get("AREALAND_PART")) + _to_float(row.get("AREAWATER_PART"))
+                area_score = _to_float(row.get("AREALAND_PART")) + _to_float(
+                    row.get("AREAWATER_PART")
+                )
             rows.append({"zip": zip_code, "county_name": county_name, "area_score": area_score})
     return rows
 
@@ -172,7 +167,9 @@ def load_dfw_zip_set(
 ) -> set[str]:
     """Resolve candidate ZIP codes to the official NCTCOG 16-county DFW set."""
 
-    normalized_targets = {zip_code for zip_code in (_normalize_zip(value) for value in zip_codes) if zip_code}
+    normalized_targets = {
+        zip_code for zip_code in (_normalize_zip(value) for value in zip_codes) if zip_code
+    }
     if not normalized_targets:
         return set()
 
@@ -185,7 +182,14 @@ def load_dfw_zip_set(
             lambda: _download_crosswalk_rows(timeout_seconds=timeout_seconds),
             max_attempts=max_attempts,
             backoff_seconds=backoff_seconds,
-            retryable_exceptions=(HTTPError, URLError, TimeoutError, OSError, UnicodeDecodeError, csv.Error),
+            retryable_exceptions=(
+                HTTPError,
+                URLError,
+                TimeoutError,
+                OSError,
+                UnicodeDecodeError,
+                csv.Error,
+            ),
             hint="Verify Census bulk URL access and network availability.",
         )
         if cache_path is not None:

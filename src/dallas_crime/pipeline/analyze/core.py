@@ -153,16 +153,50 @@ def _ensure_dependent_column(model_df: pd.DataFrame, dependent: str) -> pd.DataF
     raise KeyError(f"model_df is missing required dependent variable: {dependent}")
 
 
+def _compute_vif(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    """Compute VIF for each column in the list. Returns Series indexed by column name.
+
+    Returns an empty Series on failure (numerical instability or fewer than two columns).
+    """
+    usable = [c for c in columns if frame[c].nunique(dropna=True) > 1]
+    if len(usable) < 2:
+        return pd.Series(dtype=float)
+    try:
+        design = sm.add_constant(frame[usable], has_constant="add")
+        vif_values: dict[str, float] = {}
+        for idx, col in enumerate(design.columns):
+            if col == "const":
+                continue
+            vif_values[col] = float(variance_inflation_factor(design.values, idx))
+        return pd.Series(vif_values)
+    except (TypeError, ValueError, np.linalg.LinAlgError):
+        return pd.Series(dtype=float)
+
+
 def _select_expanded_controls(
     model_df: pd.DataFrame,
     *,
     dependent: str,
     predictors: tuple[str, ...],
     baseline_controls: tuple[str, ...],
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], list[str]]:
+    """Select expanded controls from EXPANDED_CONTROL_CANDIDATES.
+
+    Returns a tuple of (selected_controls, notes) where notes records rejected candidates
+    and the reason for rejection (row count or VIF threshold).
+
+    If no candidate clears the VIF gate but at least one passes the row-count check,
+    the first row-count-passing candidate is accepted without the VIF check; a note is
+    recorded.  This prevents a dataset with high baseline collinearity from silently
+    degrading to an unexpanded model.
+
+    Raises ValueError only when no candidate is present in the frame at all.
+    """
     frame = _ensure_dependent_column(model_df, dependent)
     base_controls = list(baseline_controls)
     selected_extras: list[str] = []
+    notes: list[str] = []
+    _vif_fallback_candidates: list[str] = []  # candidates passing row-count but failing VIF
 
     for candidate in EXPANDED_CONTROL_CANDIDATES:
         if candidate not in frame.columns:
@@ -171,16 +205,51 @@ def _select_expanded_controls(
         trial_controls = [*base_controls, *selected_extras, candidate]
         trial_columns = [dependent, *predictors, *trial_controls]
         trial_frame = _coerce_model_columns(frame, trial_columns).dropna(subset=trial_columns)
-        if len(trial_frame) >= _minimum_rows(trial_columns):
-            selected_extras.append(candidate)
+        if len(trial_frame) < _minimum_rows(trial_columns):
+            notes.append(
+                f"- `{candidate}`: rejected — only {len(trial_frame)} complete rows "
+                f"(need {_minimum_rows(trial_columns)})."
+            )
+            continue
+
+        # VIF gate: reject candidate if any term exceeds VIF = 10.0
+        vif_cols = [*predictors, *trial_controls]
+        vif_series = _compute_vif(trial_frame, list(vif_cols))
+        if not vif_series.empty:
+            high_vif = vif_series[vif_series > 10.0]
+            if not high_vif.empty:
+                offenders = ", ".join(f"{t}={v:.1f}" for t, v in high_vif.items())
+                notes.append(
+                    f"- `{candidate}`: rejected — adding it raises VIF > 10 for: {offenders}."
+                )
+                _vif_fallback_candidates.append(candidate)
+                continue
+
+        selected_extras.append(candidate)
 
     if not selected_extras:
-        raise ValueError(
-            "unable to build an expanded-controls model: none of the candidate expanded controls "
-            f"({', '.join(EXPANDED_CONTROL_CANDIDATES)}) were available with enough complete rows"
-        )
+        available = [c for c in EXPANDED_CONTROL_CANDIDATES if c in frame.columns]
+        if not available:
+            raise ValueError(
+                "unable to build an expanded-controls model: none of the candidate expanded "
+                f"controls ({', '.join(EXPANDED_CONTROL_CANDIDATES)}) are present in model_df"
+            )
+        if _vif_fallback_candidates:
+            # All row-count-passing candidates were VIF-rejected (high baseline collinearity).
+            # Accept the first available as a fallback so the sensitivity-check model can run.
+            _fallback = _vif_fallback_candidates[0]
+            notes.append(
+                f"- VIF fallback: all candidates exceeded VIF threshold; accepting `{_fallback}` "
+                "without VIF gate (baseline collinearity is too high to gate cleanly)."
+            )
+            selected_extras.append(_fallback)
+        else:
+            raise ValueError(
+                "unable to build an expanded-controls model: none of the candidate expanded "
+                f"controls ({', '.join(EXPANDED_CONTROL_CANDIDATES)}) had enough complete rows"
+            )
 
-    return tuple([*base_controls, *selected_extras])
+    return tuple([*base_controls, *selected_extras]), notes
 
 
 def run_zip_regression(
@@ -190,8 +259,13 @@ def run_zip_regression(
     predictors: tuple[str, ...] = DEFAULT_PREDICTORS,
     controls: tuple[str, ...] = DEFAULT_CONTROLS,
     model_label: str = "baseline",
+    weights_column: str | None = None,
 ) -> RegressionResult:
-    """Fit a robust OLS model over ZIP-level housing outcomes."""
+    """Fit a robust OLS (or WLS when weights_column is provided) over ZIP-level housing outcomes.
+
+    When weights_column is given and the column exists in model_df, the model is fitted
+    via WLS using those values as observation weights (smf.wls with cov_type="HC3").
+    """
 
     frame = _ensure_dependent_column(model_df, dependent)
 
@@ -230,7 +304,14 @@ def run_zip_regression(
         )
 
     formula = f"{dependent} ~ {' + '.join([*predictors, *controls])}"
-    fitted = smf.ols(formula=formula, data=frame).fit(cov_type="HC3")
+
+    # WLS path: use smf.wls when a valid weights column is provided.
+    if weights_column is not None and weights_column in frame.columns:
+        weights_series = pd.to_numeric(frame[weights_column], errors="coerce").fillna(1.0)
+        weights_array = weights_series.to_numpy(dtype=float)
+        fitted = smf.wls(formula=formula, data=frame, weights=weights_array).fit(cov_type="HC3")
+    else:
+        fitted = smf.ols(formula=formula, data=frame).fit(cov_type="HC3")
 
     coefficients = pd.DataFrame(
         {
@@ -361,9 +442,7 @@ def _build_feature_selection_artifacts(
                 univariate_r_squared = float(fitted.rsquared)
                 univariate_p_value = float(fitted.pvalues.get(feature, np.nan))
             except (TypeError, ValueError, np.linalg.LinAlgError):
-                notes.append(
-                    f"- `{feature}`: skipped univariate fit due numerical instability."
-                )
+                notes.append(f"- `{feature}`: skipped univariate fit due numerical instability.")
         score = (
             abs(correlation) * availability_ratio
             if pd.notna(correlation) and pd.notna(availability_ratio)
@@ -386,7 +465,9 @@ def _build_feature_selection_artifacts(
                 "recommended_for_future_models": 0,
                 "fdr_q_value": np.nan,
                 "passes_fdr_10": 0,
-                "practical_effect_value": abs(float(correlation)) if pd.notna(correlation) else np.nan,
+                "practical_effect_value": abs(float(correlation))
+                if pd.notna(correlation)
+                else np.nan,
                 "practical_effect_threshold": FEATURE_PRACTICAL_CORRELATION_THRESHOLD,
                 "passes_practical_effect": 0,
                 "interpretation_allowed": 0,
@@ -402,8 +483,7 @@ def _build_feature_selection_artifacts(
     selection_df["selection_rank"] = np.arange(1, len(selection_df) + 1)
     top_cut = min(10, len(selection_df))
     recommended_mask = (
-        (selection_df["selection_rank"] <= top_cut)
-        & (selection_df["availability_ratio"] >= 0.7)
+        (selection_df["selection_rank"] <= top_cut) & (selection_df["availability_ratio"] >= 0.7)
     ) | (selection_df["selected_in_current_models"] == 1)
     selection_df["recommended_for_future_models"] = recommended_mask.astype(int)
     selection_df["fdr_q_value"] = _bh_adjust_series(selection_df["univariate_p_value"])
@@ -461,9 +541,7 @@ def _build_feature_power_retention_artifacts(
     selection_scores = pd.to_numeric(selection_frame.get("selection_score"), errors="coerce")
     selection_score_total = float(selection_scores.sum()) if not selection_frame.empty else np.nan
     selection_score_recommended = (
-        float(selection_scores.loc[recommended_mask].sum())
-        if not selection_frame.empty
-        else np.nan
+        float(selection_scores.loc[recommended_mask].sum()) if not selection_frame.empty else np.nan
     )
     selection_score_retention_ratio = (
         float(selection_score_recommended / selection_score_total)
@@ -654,10 +732,9 @@ def _build_predictive_model_family_artifacts(
 
     advanced_frame = model_df.copy()
     if {"violent_rate_per_1000", "property_rate_per_1000"} <= set(advanced_frame.columns):
-        advanced_frame["violent_property_interaction"] = (
-            pd.to_numeric(advanced_frame["violent_rate_per_1000"], errors="coerce")
-            * pd.to_numeric(advanced_frame["property_rate_per_1000"], errors="coerce")
-        )
+        advanced_frame["violent_property_interaction"] = pd.to_numeric(
+            advanced_frame["violent_rate_per_1000"], errors="coerce"
+        ) * pd.to_numeric(advanced_frame["property_rate_per_1000"], errors="coerce")
     _try_add_model(
         frame=advanced_frame,
         predictors=tuple(
@@ -674,7 +751,9 @@ def _build_predictive_model_family_artifacts(
     )
 
     specialized_frame = model_df.copy()
-    if not cluster_assignments.empty and {"zip", "crime_cluster"} <= set(cluster_assignments.columns):
+    if not cluster_assignments.empty and {"zip", "crime_cluster"} <= set(
+        cluster_assignments.columns
+    ):
         specialized_frame = specialized_frame.merge(
             cluster_assignments[["zip", "crime_cluster"]],
             on="zip",
@@ -733,7 +812,9 @@ def _build_predictive_model_family_artifacts(
         inverse_errors = []
         for model_label in selected_models:
             loocv_rmse = float(
-                family_metrics.loc[family_metrics["model_label"] == model_label, "loocv_rmse"].iloc[0]
+                family_metrics.loc[family_metrics["model_label"] == model_label, "loocv_rmse"].iloc[
+                    0
+                ]
             )
             inverse_errors.append(1.0 / max(loocv_rmse, 1e-6))
         total_inverse = float(np.sum(inverse_errors))
@@ -746,9 +827,9 @@ def _build_predictive_model_family_artifacts(
                 family_metrics["model_label"].isin(selected_models),
                 "selected_for_ensemble",
             ] = 1
-            family_metrics["ensemble_weight"] = family_metrics["model_label"].map(
-                selected_weights
-            ).fillna(0.0)
+            family_metrics["ensemble_weight"] = (
+                family_metrics["model_label"].map(selected_weights).fillna(0.0)
+            )
 
     prediction_rows: list[dict[str, object]] = []
     model_prediction_map: dict[str, pd.DataFrame] = {}
@@ -774,8 +855,12 @@ def _build_predictive_model_family_artifacts(
                 }
             )
 
-    if len(selected_weights) >= 2 and all(model in model_prediction_map for model in selected_weights):
-        observed_frame = _ensure_dependent_column(model_df, "log_home_value")[["zip", "log_home_value"]].copy()
+    if len(selected_weights) >= 2 and all(
+        model in model_prediction_map for model in selected_weights
+    ):
+        observed_frame = _ensure_dependent_column(model_df, "log_home_value")[
+            ["zip", "log_home_value"]
+        ].copy()
         observed_frame["zip"] = observed_frame["zip"].astype("string")
         observed_frame["log_home_value"] = pd.to_numeric(
             observed_frame["log_home_value"], errors="coerce"
@@ -981,7 +1066,9 @@ def _build_comprehensive_validation_artifacts(
         )
 
     if not drift_diagnostics.empty:
-        drift_flag_share = float(pd.to_numeric(drift_diagnostics["drift_flag"], errors="coerce").mean())
+        drift_flag_share = float(
+            pd.to_numeric(drift_diagnostics["drift_flag"], errors="coerce").mean()
+        )
         rows.append(
             {
                 "domain": "drift",
@@ -1014,7 +1101,9 @@ def _build_comprehensive_validation_artifacts(
                 "item": "all_domains",
                 "metric": "practical_utility_pass_share",
                 "value": float(
-                    pd.to_numeric(cluster_stability["practical_utility_pass"], errors="coerce").mean()
+                    pd.to_numeric(
+                        cluster_stability["practical_utility_pass"], errors="coerce"
+                    ).mean()
                 ),
             }
         )
@@ -1028,7 +1117,9 @@ def _build_comprehensive_validation_artifacts(
                 "item": "all_tests",
                 "metric": "interpretation_allowed_share",
                 "value": float(
-                    pd.to_numeric(statistical_guardrails["interpretation_allowed"], errors="coerce").mean()
+                    pd.to_numeric(
+                        statistical_guardrails["interpretation_allowed"], errors="coerce"
+                    ).mean()
                 ),
             }
         )
@@ -1100,7 +1191,9 @@ def _build_policy_recommendations_artifacts(
     ]
     notes: list[str] = []
     if zip_benchmarks.empty:
-        notes.append("ZIP benchmark inputs were empty, so no policy recommendations were generated.")
+        notes.append(
+            "ZIP benchmark inputs were empty, so no policy recommendations were generated."
+        )
         return pd.DataFrame(columns=columns), notes
     if scenario_impacts.empty:
         notes.append("Scenario impacts were empty, so policy recommendations are unavailable.")
@@ -1143,7 +1236,9 @@ def _build_policy_recommendations_artifacts(
         return pd.DataFrame(columns=columns), notes
 
     global_rate_median = float(merged["total_rate_per_1000"].median())
-    global_shock_median = float(pd.to_numeric(merged.get("systemic_shock"), errors="coerce").median())
+    global_shock_median = float(
+        pd.to_numeric(merged.get("systemic_shock"), errors="coerce").median()
+    )
     rows: list[dict[str, object]] = []
     segment_to_domain = {
         "crime_cluster": "crime",
@@ -1155,16 +1250,19 @@ def _build_policy_recommendations_artifacts(
             continue
         domain_cluster = (
             cluster_lookup.loc[cluster_lookup["domain"].astype(str) == domain].iloc[0]
-            if not cluster_lookup.empty
-            and (cluster_lookup["domain"].astype(str) == domain).any()
+            if not cluster_lookup.empty and (cluster_lookup["domain"].astype(str) == domain).any()
             else None
         )
         for segment_label, segment_frame in merged.groupby(segment_type, dropna=True):
             zip_count = int(len(segment_frame))
             avg_rate = float(segment_frame["total_rate_per_1000"].mean())
             avg_home_value = float(segment_frame["home_value"].mean())
-            adverse_delta = float(pd.to_numeric(segment_frame.get("adverse_momentum"), errors="coerce").mean())
-            shock_delta = float(pd.to_numeric(segment_frame.get("systemic_shock"), errors="coerce").mean())
+            adverse_delta = float(
+                pd.to_numeric(segment_frame.get("adverse_momentum"), errors="coerce").mean()
+            )
+            shock_delta = float(
+                pd.to_numeric(segment_frame.get("systemic_shock"), errors="coerce").mean()
+            )
             scenario_eligible_zip_count = int(
                 segment_frame["zip"].astype("string").isin(scenario_supported_zips).sum()
             )
@@ -1174,18 +1272,30 @@ def _build_policy_recommendations_artifacts(
             )
             high_influence_zip_share = _safe_ratio(high_influence_zip_count, zip_count)
             cluster_selected_k = (
-                int(pd.to_numeric(pd.Series([domain_cluster.get("selected_k")]), errors="coerce").iloc[0])
+                int(
+                    pd.to_numeric(
+                        pd.Series([domain_cluster.get("selected_k")]), errors="coerce"
+                    ).iloc[0]
+                )
                 if domain_cluster is not None
-                and pd.notna(pd.to_numeric(pd.Series([domain_cluster.get("selected_k")]), errors="coerce").iloc[0])
+                and pd.notna(
+                    pd.to_numeric(
+                        pd.Series([domain_cluster.get("selected_k")]), errors="coerce"
+                    ).iloc[0]
+                )
                 else np.nan
             )
             cluster_min_cluster_size = (
                 int(
-                    pd.to_numeric(pd.Series([domain_cluster.get("min_cluster_size")]), errors="coerce").iloc[0]
+                    pd.to_numeric(
+                        pd.Series([domain_cluster.get("min_cluster_size")]), errors="coerce"
+                    ).iloc[0]
                 )
                 if domain_cluster is not None
                 and pd.notna(
-                    pd.to_numeric(pd.Series([domain_cluster.get("min_cluster_size")]), errors="coerce").iloc[0]
+                    pd.to_numeric(
+                        pd.Series([domain_cluster.get("min_cluster_size")]), errors="coerce"
+                    ).iloc[0]
                 )
                 else np.nan
             )
@@ -1207,7 +1317,9 @@ def _build_policy_recommendations_artifacts(
             )
             cluster_silhouette_score = (
                 float(
-                    pd.to_numeric(pd.Series([domain_cluster.get("silhouette_score")]), errors="coerce").iloc[0]
+                    pd.to_numeric(
+                        pd.Series([domain_cluster.get("silhouette_score")]), errors="coerce"
+                    ).iloc[0]
                 )
                 if domain_cluster is not None
                 else np.nan
@@ -1235,7 +1347,8 @@ def _build_policy_recommendations_artifacts(
                 else 0
             )
             segment_size_pass = int(
-                pd.notna(cluster_min_cluster_size_threshold) and zip_count >= cluster_min_cluster_size_threshold
+                pd.notna(cluster_min_cluster_size_threshold)
+                and zip_count >= cluster_min_cluster_size_threshold
             )
             guardrail_flags: list[str] = []
             if cluster_practical_utility_pass == 0:
@@ -1246,7 +1359,9 @@ def _build_policy_recommendations_artifacts(
                 guardrail_flags.append("small_segment")
             if high_influence_zip_share >= SEGMENT_HIGH_INFLUENCE_SHARE_THRESHOLD:
                 guardrail_flags.append("high_influence_concentration")
-            if (avg_rate >= global_rate_median) or (pd.notna(shock_delta) and shock_delta >= global_shock_median):
+            if (avg_rate >= global_rate_median) or (
+                pd.notna(shock_delta) and shock_delta >= global_shock_median
+            ):
                 priority = "high"
                 actions = (
                     "Focused deterrence operations; hot-spot lighting and CPTED upgrades; "
@@ -1264,7 +1379,10 @@ def _build_policy_recommendations_artifacts(
                     "Maintain preventive services; monitor drift flags quarterly; "
                     "preserve affordability and neighborhood maintenance capacity"
                 )
-            if any(flag in guardrail_flags for flag in ("small_segment", "high_influence_concentration")):
+            if any(
+                flag in guardrail_flags
+                for flag in ("small_segment", "high_influence_concentration")
+            ):
                 segment_guardrail_status = "blocked"
                 segment_confidence_tier = "low"
             elif guardrail_flags:
@@ -1307,7 +1425,9 @@ def _build_policy_recommendations_artifacts(
 
     policy_df = pd.DataFrame.from_records(rows, columns=columns)
     if policy_df.empty:
-        notes.append("No segment groups with usable metrics were available for policy recommendations.")
+        notes.append(
+            "No segment groups with usable metrics were available for policy recommendations."
+        )
         return policy_df, notes
     if (policy_df["segment_guardrail_status"].astype(str) != "clear").any():
         notes.append(
@@ -1409,7 +1529,9 @@ def _build_influence_robustness_artifacts(
 
     for result in results:
         if "zip" not in result.model_frame.columns:
-            notes.append(f"- `{result.model_label}`: ZIP column was unavailable for influence checks.")
+            notes.append(
+                f"- `{result.model_label}`: ZIP column was unavailable for influence checks."
+            )
             continue
 
         fitted = smf.ols(formula=result.formula, data=result.model_frame).fit()
@@ -1441,7 +1563,9 @@ def _build_influence_robustness_artifacts(
             )
 
         original_terms = {
-            term: float(result.coefficients.loc[result.coefficients["term"] == term, "estimate"].iloc[0])
+            term: float(
+                result.coefficients.loc[result.coefficients["term"] == term, "estimate"].iloc[0]
+            )
             if (result.coefficients["term"] == term).any()
             else np.nan
             for term in DEFAULT_PREDICTORS
@@ -1482,7 +1606,11 @@ def _build_influence_robustness_artifacts(
             for term in DEFAULT_PREDICTORS:
                 original = original_terms.get(term, np.nan)
                 updated = float(refit.params.get(term, np.nan))
-                if pd.notna(original) and pd.notna(updated) and np.sign(original) != np.sign(updated):
+                if (
+                    pd.notna(original)
+                    and pd.notna(updated)
+                    and np.sign(original) != np.sign(updated)
+                ):
                     sign_flip = True
             r_squared_change = float(refit.rsquared - result.r_squared)
             fit_stability_pass = int(abs(r_squared_change) <= 0.05)
@@ -1497,7 +1625,10 @@ def _build_influence_robustness_artifacts(
                             reason
                             for reason, passed in (
                                 ("high_leverage", flagged_row.leverage >= leverage_threshold),
-                                ("high_cooks_distance", flagged_row.cooks_distance >= cooks_threshold),
+                                (
+                                    "high_cooks_distance",
+                                    flagged_row.cooks_distance >= cooks_threshold,
+                                ),
                             )
                             if passed
                         ]
@@ -1527,7 +1658,9 @@ def _build_influence_robustness_artifacts(
 
         model_rows = [row for row in rows if row["model_label"] == result.model_label]
         if model_rows:
-            fit_warning_count = sum(1 for row in model_rows if int(row["fit_improvement_warning"]) == 1)
+            fit_warning_count = sum(
+                1 for row in model_rows if int(row["fit_improvement_warning"]) == 1
+            )
             if fit_warning_count > 0:
                 notes.append(
                     f"- `{result.model_label}`: {fit_warning_count} flagged ZIP leave-out refits exceeded "
@@ -1639,9 +1772,7 @@ def _annotate_residuals_with_influence_flags(
         on=["model_label", "zip"],
         how="left",
     )
-    merged["is_high_influence_flagged"] = (
-        merged["influence_flag_reason"].notna().astype(int)
-    )
+    merged["is_high_influence_flagged"] = merged["influence_flag_reason"].notna().astype(int)
     return merged
 
 
@@ -1669,9 +1800,7 @@ def _apply_regression_guardrails(coefficients: pd.DataFrame) -> pd.DataFrame:
         >= REGRESSION_PRACTICAL_EFFECT_THRESHOLD_PCT
     ).astype(int)
     guarded["interpretation_allowed"] = (
-        non_intercept
-        & (guarded["passes_fdr_10"] == 1)
-        & (guarded["passes_practical_effect"] == 1)
+        non_intercept & (guarded["passes_fdr_10"] == 1) & (guarded["passes_practical_effect"] == 1)
     ).astype(int)
     return guarded
 
@@ -1695,7 +1824,9 @@ def _build_statistical_guardrails_artifacts(
     ]
     rows: list[dict[str, object]] = []
 
-    for row in coefficients.loc[coefficients["term"].astype(str) != "Intercept"].itertuples(index=False):
+    for row in coefficients.loc[coefficients["term"].astype(str) != "Intercept"].itertuples(
+        index=False
+    ):
         rows.append(
             {
                 "domain": "regression",
@@ -1721,7 +1852,9 @@ def _build_statistical_guardrails_artifacts(
                 "domain": "feature_selection",
                 "item": "feature_selection_metrics",
                 "term": row.feature_name,
-                "raw_p_value": float(row.univariate_p_value) if pd.notna(row.univariate_p_value) else np.nan,
+                "raw_p_value": float(row.univariate_p_value)
+                if pd.notna(row.univariate_p_value)
+                else np.nan,
                 "fdr_q_value": float(row.fdr_q_value) if pd.notna(row.fdr_q_value) else np.nan,
                 "practical_effect_value": float(row.practical_effect_value)
                 if pd.notna(row.practical_effect_value)
@@ -1741,7 +1874,9 @@ def _build_statistical_guardrails_artifacts(
                 "domain": "spatial",
                 "item": "spatial_diagnostics",
                 "term": row.metric,
-                "raw_p_value": float(row.permutation_p_value) if pd.notna(row.permutation_p_value) else np.nan,
+                "raw_p_value": float(row.permutation_p_value)
+                if pd.notna(row.permutation_p_value)
+                else np.nan,
                 "fdr_q_value": float(row.fdr_q_value) if pd.notna(row.fdr_q_value) else np.nan,
                 "practical_effect_value": float(row.practical_effect_value)
                 if pd.notna(row.practical_effect_value)
@@ -1827,3 +1962,583 @@ def _build_vif_artifacts(results: list[RegressionResult]) -> tuple[pd.DataFrame,
         ascending=[True, False],
     )
     return combined, notes
+
+
+def _audit_baseline_controls(model_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute VIF and pairwise Pearson correlations for DEFAULT_CONTROLS.
+
+    Returns a DataFrame with columns: control, vif, and one corr_<other> column per
+    pairwise partner.  Rows with VIF > 10 are flagged via a printed warning.
+    """
+    frame = _ensure_dependent_column(model_df, "log_home_value")
+    all_cols = ["log_home_value", *DEFAULT_PREDICTORS, *DEFAULT_CONTROLS]
+    present = [c for c in all_cols if c in frame.columns]
+    frame = _coerce_model_columns(frame, present)
+    sub = frame[present].dropna()
+
+    vif_input_cols = [c for c in [*DEFAULT_PREDICTORS, *DEFAULT_CONTROLS] if c in sub.columns]
+    vif_series = _compute_vif(sub, vif_input_cols)
+
+    control_cols = [c for c in DEFAULT_CONTROLS if c in sub.columns]
+    rows: list[dict[str, object]] = []
+    for ctrl in control_cols:
+        row: dict[str, object] = {
+            "control": ctrl,
+            "vif": float(vif_series.get(ctrl, np.nan)),
+        }
+        for other in control_cols:
+            if other == ctrl:
+                continue
+            row[f"corr_{other}"] = (
+                float(sub[ctrl].corr(sub[other]))
+                if ctrl in sub.columns and other in sub.columns
+                else np.nan
+            )
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    audit_df = pd.DataFrame(rows)
+
+    high_vif = audit_df[audit_df["vif"].gt(10.0).fillna(False)]
+    if not high_vif.empty:
+        for term in high_vif["control"].tolist():
+            print(
+                f"[analyze] WARNING (R6): baseline control '{term}' has VIF > 10 "
+                "— consider reviewing collinearity among DEFAULT_CONTROLS.",
+                flush=True,
+            )
+
+    return audit_df
+
+
+# ---------------------------------------------------------------------------
+# Factor importance analysis (Phases 1–4)
+# ---------------------------------------------------------------------------
+
+_FACTOR_IMPORTANCE_EXCLUDE_COLUMNS = frozenset(
+    {"zip", "log_home_value", "home_value", "real_estate_home_value"}
+)
+
+
+def _is_boolean_flag_column(series: pd.Series) -> bool:
+    """Return True if the column looks like a boolean flag (only 0/1/True/False/NaN)."""
+    vals = series.dropna().unique()
+    if len(vals) == 0:
+        return True
+    if series.dtype == bool:
+        return True
+    numeric = pd.to_numeric(series, errors="coerce").dropna().unique()
+    return set(numeric).issubset({0.0, 1.0})
+
+
+def _build_factor_importance_artifacts(
+    model_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
+    """Build factor importance artifacts (Phases 1–4).
+
+    Returns
+    -------
+    univariate_df : pd.DataFrame
+        Phase 1 univariate screening results.
+    standardized_df : pd.DataFrame
+        Phase 2 standardized coefficient results.
+    decomposition_df : pd.DataFrame
+        Phase 3 LMG variance decomposition results.
+    summary_md : str
+        Phase 4 markdown summary report.
+    """
+    from itertools import combinations
+    from scipy.stats import spearmanr
+
+    frame = _ensure_dependent_column(model_df, "log_home_value")
+    frame["log_home_value"] = pd.to_numeric(frame["log_home_value"], errors="coerce")
+
+    # ---- Phase 1: enumerate candidate predictors ----
+    candidates: list[str] = []
+    for col in frame.columns:
+        if col in _FACTOR_IMPORTANCE_EXCLUDE_COLUMNS:
+            continue
+        if col.endswith("_imputed"):
+            continue
+        series = frame[col]
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() < 3:
+            continue
+        if _is_boolean_flag_column(series):
+            continue
+        candidates.append(col)
+
+    # Phase 1: univariate screening
+    univariate_rows: list[dict[str, object]] = []
+    for feature in candidates:
+        values = pd.to_numeric(frame[feature], errors="coerce")
+        mask = values.notna() & frame["log_home_value"].notna()
+        n_complete = int(mask.sum())
+        if n_complete < 3 or values.loc[mask].nunique(dropna=True) <= 1:
+            continue
+        x = values.loc[mask]
+        y = frame.loc[mask, "log_home_value"]
+        pearson_r = float(x.corr(y))
+        try:
+            spearman_rho = float(spearmanr(x, y).statistic)
+        except (TypeError, ValueError):
+            spearman_rho = np.nan
+        univariate_r_squared = np.nan
+        raw_p_value = np.nan
+        try:
+            fitted = smf.ols(
+                formula=f"log_home_value ~ Q('{feature}')"
+                if " " in feature
+                else f"log_home_value ~ {feature}",
+                data=frame.loc[mask, ["log_home_value", feature]],
+            ).fit(cov_type="HC3")
+            univariate_r_squared = float(fitted.rsquared)
+            raw_p_value = float(fitted.pvalues.get(feature, np.nan))
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            pass
+        univariate_rows.append(
+            {
+                "feature": feature,
+                "n_complete": n_complete,
+                "pearson_r": pearson_r,
+                "spearman_rho": spearman_rho,
+                "univariate_r_squared": univariate_r_squared,
+                "raw_p_value": raw_p_value,
+            }
+        )
+
+    univariate_df = pd.DataFrame(univariate_rows)
+    if univariate_df.empty:
+        univariate_df = pd.DataFrame(
+            columns=[
+                "feature",
+                "n_complete",
+                "pearson_r",
+                "spearman_rho",
+                "univariate_r_squared",
+                "raw_p_value",
+                "fdr_q_value",
+                "passes_fdr_10",
+            ]
+        )
+        empty_std = pd.DataFrame(
+            columns=[
+                "feature",
+                "standardized_beta",
+                "abs_standardized_beta",
+                "std_error",
+                "p_value",
+                "fdr_q_value",
+                "rank",
+            ]
+        )
+        empty_decomp = pd.DataFrame(
+            columns=["feature", "lmg_r_squared_share", "lmg_pct_of_total_r_squared", "rank"]
+        )
+        return (
+            univariate_df,
+            empty_std,
+            empty_decomp,
+            "# Factor Importance Summary\n\nNo candidate features found.\n",
+        )
+
+    # FDR adjustment
+    univariate_df["fdr_q_value"] = _bh_adjust_series(univariate_df["raw_p_value"])
+    univariate_df["passes_fdr_10"] = (
+        univariate_df["fdr_q_value"].notna() & (univariate_df["fdr_q_value"] <= FDR_ALPHA)
+    ).astype(int)
+    univariate_df = univariate_df.sort_values(
+        "univariate_r_squared",
+        ascending=False,
+        na_position="last",
+    ).reset_index(drop=True)
+
+    # ---- Phase 2: standardized coefficient comparison ----
+    n_total = len(frame)
+    min_obs_threshold = min(50, n_total)
+    admissible_mask = (univariate_df["passes_fdr_10"] == 1) & (
+        univariate_df["n_complete"] >= min_obs_threshold
+    )
+    admissible_features = univariate_df.loc[admissible_mask, "feature"].tolist()
+
+    standardized_df = pd.DataFrame(
+        columns=[
+            "feature",
+            "standardized_beta",
+            "abs_standardized_beta",
+            "std_error",
+            "p_value",
+            "fdr_q_value",
+            "rank",
+        ]
+    )
+    decomposition_df = pd.DataFrame(
+        columns=["feature", "lmg_r_squared_share", "lmg_pct_of_total_r_squared", "rank"]
+    )
+
+    if admissible_features:
+        # Build complete-case dataset for admissible predictors + log_home_value
+        all_cols = ["log_home_value", *admissible_features]
+        work = frame[all_cols].copy()
+        for c in all_cols:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+        work = work.dropna().reset_index(drop=True)
+        n_obs = len(work)
+
+        if n_obs >= 3:
+            # Standardize to z-scores
+            z_work = work.copy()
+            for c in all_cols:
+                col_std = float(work[c].std(ddof=1))
+                if col_std > 0:
+                    z_work[c] = (work[c] - work[c].mean()) / col_std
+                else:
+                    z_work[c] = 0.0
+
+            # Determine if we need stepwise selection
+            max_predictors = max(n_obs // 5, 1)
+            if len(admissible_features) > max_predictors:
+                # Forward stepwise selection in descending univariate R² order
+                ranked = (
+                    univariate_df.loc[univariate_df["feature"].isin(admissible_features)]
+                    .sort_values("univariate_r_squared", ascending=False)["feature"]
+                    .tolist()
+                )
+                selected: list[str] = [ranked[0]]
+                for candidate in ranked[1:]:
+                    if len(selected) >= max_predictors:
+                        break
+                    trial = selected + [candidate]
+                    formula = "log_home_value ~ " + " + ".join(trial)
+                    try:
+                        trial_fit = smf.ols(formula=formula, data=z_work).fit(cov_type="HC3")
+                        if float(trial_fit.pvalues.get(candidate, 1.0)) < 0.10:
+                            selected.append(candidate)
+                    except (TypeError, ValueError, np.linalg.LinAlgError):
+                        pass
+                final_features = selected
+            else:
+                final_features = admissible_features
+
+            # Fit the multivariate standardized model
+            formula = "log_home_value ~ " + " + ".join(final_features)
+            try:
+                std_fit = smf.ols(formula=formula, data=z_work).fit(cov_type="HC3")
+                std_rows: list[dict[str, object]] = []
+                for feat in final_features:
+                    beta = float(std_fit.params.get(feat, np.nan))
+                    se = float(std_fit.bse.get(feat, np.nan))
+                    pval = float(std_fit.pvalues.get(feat, np.nan))
+                    std_rows.append(
+                        {
+                            "feature": feat,
+                            "standardized_beta": beta,
+                            "abs_standardized_beta": abs(beta),
+                            "std_error": se,
+                            "p_value": pval,
+                        }
+                    )
+                standardized_df = pd.DataFrame(std_rows)
+                standardized_df["fdr_q_value"] = _bh_adjust_series(standardized_df["p_value"])
+                standardized_df = standardized_df.sort_values(
+                    "abs_standardized_beta",
+                    ascending=False,
+                ).reset_index(drop=True)
+                standardized_df["rank"] = np.arange(1, len(standardized_df) + 1)
+
+                # ---- Phase 3: LMG variance decomposition ----
+                total_r2 = float(std_fit.rsquared)
+                k = len(final_features)
+
+                if k == 1:
+                    # Trivial case: single predictor owns all R²
+                    decomposition_df = pd.DataFrame(
+                        [
+                            {
+                                "feature": final_features[0],
+                                "lmg_r_squared_share": total_r2,
+                                "lmg_pct_of_total_r_squared": 100.0,
+                                "rank": 1,
+                            }
+                        ]
+                    )
+                elif k <= 12:
+                    # Exact LMG: iterate over all 2^k subsets
+                    lmg_shares = {feat: 0.0 for feat in final_features}
+                    from math import factorial
+
+                    for feat in final_features:
+                        others = [f for f in final_features if f != feat]
+                        # sum over all subsets S of others
+                        for size in range(len(others) + 1):
+                            for subset in combinations(others, size):
+                                s_size = len(subset)
+                                weight = (
+                                    factorial(s_size) * factorial(k - s_size - 1) / factorial(k)
+                                )
+                                # R² with subset
+                                if subset:
+                                    formula_without = "log_home_value ~ " + " + ".join(subset)
+                                    try:
+                                        r2_without = float(
+                                            smf.ols(formula=formula_without, data=z_work)
+                                            .fit()
+                                            .rsquared
+                                        )
+                                    except (TypeError, ValueError, np.linalg.LinAlgError):
+                                        r2_without = 0.0
+                                else:
+                                    r2_without = 0.0
+                                # R² with subset + feat
+                                formula_with = "log_home_value ~ " + " + ".join([*subset, feat])
+                                try:
+                                    r2_with = float(
+                                        smf.ols(formula=formula_with, data=z_work).fit().rsquared
+                                    )
+                                except (TypeError, ValueError, np.linalg.LinAlgError):
+                                    r2_with = r2_without
+                                lmg_shares[feat] += weight * (r2_with - r2_without)
+
+                    decomp_rows = []
+                    for feat, share in lmg_shares.items():
+                        pct = (share / total_r2 * 100.0) if total_r2 > 0 else 0.0
+                        decomp_rows.append(
+                            {
+                                "feature": feat,
+                                "lmg_r_squared_share": share,
+                                "lmg_pct_of_total_r_squared": pct,
+                            }
+                        )
+                    decomposition_df = (
+                        pd.DataFrame(decomp_rows)
+                        .sort_values(
+                            "lmg_r_squared_share",
+                            ascending=False,
+                        )
+                        .reset_index(drop=True)
+                    )
+                    decomposition_df["rank"] = np.arange(1, len(decomposition_df) + 1)
+                else:
+                    # Approximate LMG with 500 random permutations
+                    rng = np.random.default_rng(20260323)
+                    marginal_gains = {feat: [] for feat in final_features}
+                    for _ in range(500):
+                        perm = list(rng.permutation(final_features))
+                        prev_r2 = 0.0
+                        for feat in perm:
+                            idx = perm.index(feat)
+                            current_set = perm[: idx + 1]
+                            formula_cur = "log_home_value ~ " + " + ".join(current_set)
+                            try:
+                                cur_r2 = float(
+                                    smf.ols(formula=formula_cur, data=z_work).fit().rsquared
+                                )
+                            except (TypeError, ValueError, np.linalg.LinAlgError):
+                                cur_r2 = prev_r2
+                            marginal_gains[feat].append(cur_r2 - prev_r2)
+                            prev_r2 = cur_r2
+
+                    decomp_rows = []
+                    for feat in final_features:
+                        share = float(np.mean(marginal_gains[feat]))
+                        pct = (share / total_r2 * 100.0) if total_r2 > 0 else 0.0
+                        decomp_rows.append(
+                            {
+                                "feature": feat,
+                                "lmg_r_squared_share": share,
+                                "lmg_pct_of_total_r_squared": pct,
+                            }
+                        )
+                    decomposition_df = (
+                        pd.DataFrame(decomp_rows)
+                        .sort_values(
+                            "lmg_r_squared_share",
+                            ascending=False,
+                        )
+                        .reset_index(drop=True)
+                    )
+                    decomposition_df["rank"] = np.arange(1, len(decomposition_df) + 1)
+
+            except (TypeError, ValueError, np.linalg.LinAlgError):
+                pass  # standardized_df and decomposition_df remain empty
+
+    # ---- Phase 4: summary markdown ----
+    summary_md = _build_factor_importance_summary(
+        univariate_df,
+        standardized_df,
+        decomposition_df,
+        frame,
+        admissible_features,
+    )
+
+    return univariate_df, standardized_df, decomposition_df, summary_md
+
+
+def _build_factor_importance_summary(
+    univariate_df: pd.DataFrame,
+    standardized_df: pd.DataFrame,
+    decomposition_df: pd.DataFrame,
+    frame: pd.DataFrame,
+    admissible_features: list[str],
+) -> str:
+    """Generate the Phase 4 markdown summary for factor importance."""
+    lines: list[str] = [
+        "# Factor Importance Summary",
+        "",
+        "Which available features in model_dataset.csv are the strongest independent "
+        "drivers of ZIP-level home values in DFW?",
+        "",
+    ]
+
+    # Top 10 table across three ranking methods
+    lines.append("## Top 10 Features by Three Ranking Methods")
+    lines.append("")
+    lines.append("| Rank | Univariate R² | Abs Standardized Beta | LMG R² Share |")
+    lines.append("|------|--------------|----------------------|-------------|")
+    top_n = 10
+    uni_top = (
+        univariate_df.head(top_n)[["feature", "univariate_r_squared"]].values.tolist()
+        if not univariate_df.empty
+        else []
+    )
+    std_top = (
+        standardized_df.head(top_n)[["feature", "abs_standardized_beta"]].values.tolist()
+        if not standardized_df.empty
+        else []
+    )
+    lmg_top = (
+        decomposition_df.head(top_n)[["feature", "lmg_r_squared_share"]].values.tolist()
+        if not decomposition_df.empty
+        else []
+    )
+    max_rows = max(len(uni_top), len(std_top), len(lmg_top), 1)
+    for i in range(max_rows):
+        uni_cell = f"{uni_top[i][0]} ({uni_top[i][1]:.4f})" if i < len(uni_top) else ""
+        std_cell = f"{std_top[i][0]} ({std_top[i][1]:.4f})" if i < len(std_top) else ""
+        lmg_cell = f"{lmg_top[i][0]} ({lmg_top[i][1]:.4f})" if i < len(lmg_top) else ""
+        lines.append(f"| {i + 1} | {uni_cell} | {std_cell} | {lmg_cell} |")
+    lines.append("")
+
+    # Consensus top factors
+    lines.append("## Consensus Top Factors")
+    lines.append("")
+    lines.append(
+        "Features appearing in the top 5 across at least two of the three ranking methods."
+    )
+    lines.append("")
+    top5_uni = set(univariate_df.head(5)["feature"]) if not univariate_df.empty else set()
+    top5_std = set(standardized_df.head(5)["feature"]) if not standardized_df.empty else set()
+    top5_lmg = set(decomposition_df.head(5)["feature"]) if not decomposition_df.empty else set()
+    consensus = set()
+    for feat in top5_uni | top5_std | top5_lmg:
+        count = sum([feat in top5_uni, feat in top5_std, feat in top5_lmg])
+        if count >= 2:
+            consensus.add(feat)
+    if consensus:
+        for feat in sorted(consensus):
+            appearances = []
+            if feat in top5_uni:
+                appearances.append("univariate R²")
+            if feat in top5_std:
+                appearances.append("standardized beta")
+            if feat in top5_lmg:
+                appearances.append("LMG R² share")
+            lines.append(f"- **{feat}**: top 5 in {', '.join(appearances)}")
+    else:
+        lines.append("No feature appeared in the top 5 across two or more methods.")
+    lines.append("")
+
+    # Where total_rate_per_1000 ranks
+    lines.append("## Crime Rate Ranking (total_rate_per_1000)")
+    lines.append("")
+    crime_feat = "total_rate_per_1000"
+    uni_rank = "not present"
+    if not univariate_df.empty and crime_feat in univariate_df["feature"].values:
+        idx = int(univariate_df.loc[univariate_df["feature"] == crime_feat].index[0])
+        uni_rank = f"#{idx + 1} of {len(univariate_df)}"
+    std_rank = "not in admissible set"
+    if not standardized_df.empty and crime_feat in standardized_df["feature"].values:
+        rank_val = int(
+            standardized_df.loc[standardized_df["feature"] == crime_feat, "rank"].iloc[0]
+        )
+        std_rank = f"#{rank_val} of {len(standardized_df)}"
+    lmg_rank = "not in admissible set"
+    if not decomposition_df.empty and crime_feat in decomposition_df["feature"].values:
+        rank_val = int(
+            decomposition_df.loc[decomposition_df["feature"] == crime_feat, "rank"].iloc[0]
+        )
+        lmg_rank = f"#{rank_val} of {len(decomposition_df)}"
+    lines.append(f"- Univariate R²: {uni_rank}")
+    lines.append(f"- Standardized beta: {std_rank}")
+    lines.append(f"- LMG R² share: {lmg_rank}")
+    lines.append("")
+
+    # Collinearity clusters
+    lines.append("## Collinearity Clusters")
+    lines.append("")
+    lines.append("Groups of admissible predictors with pairwise |Pearson r| > 0.7.")
+    lines.append("")
+    if admissible_features and len(admissible_features) >= 2:
+        from itertools import combinations as _combos
+
+        work_cols = [c for c in admissible_features if c in frame.columns]
+        corr_pairs: list[tuple[str, str, float]] = []
+        for a, b in _combos(work_cols, 2):
+            vals_a = pd.to_numeric(frame[a], errors="coerce")
+            vals_b = pd.to_numeric(frame[b], errors="coerce")
+            mask = vals_a.notna() & vals_b.notna()
+            if mask.sum() >= 3:
+                r = float(vals_a.loc[mask].corr(vals_b.loc[mask]))
+                if abs(r) > 0.7:
+                    corr_pairs.append((a, b, r))
+
+        if corr_pairs:
+            # Build clusters via union-find
+            parent: dict[str, str] = {}
+
+            def find(x: str) -> str:
+                while parent.get(x, x) != x:
+                    parent[x] = parent.get(parent[x], parent[x])
+                    x = parent[x]
+                return x
+
+            def union(x: str, y: str) -> None:
+                px, py = find(x), find(y)
+                if px != py:
+                    parent[px] = py
+
+            for a, b, _ in corr_pairs:
+                union(a, b)
+
+            clusters: dict[str, list[str]] = {}
+            for feat in work_cols:
+                root = find(feat)
+                if root not in clusters:
+                    clusters[root] = []
+                clusters[root].append(feat)
+
+            # Only report clusters with 2+ members
+            cluster_id = 0
+            uni_lookup = {}
+            if not univariate_df.empty:
+                uni_lookup = dict(
+                    zip(univariate_df["feature"], univariate_df["univariate_r_squared"])
+                )
+            for root, members in sorted(clusters.items(), key=lambda kv: -len(kv[1])):
+                if len(members) < 2:
+                    continue
+                cluster_id += 1
+                best = max(members, key=lambda m: uni_lookup.get(m, 0.0))
+                lines.append(
+                    f"**Cluster {cluster_id}**: {', '.join(sorted(members))} "
+                    f"(best representative: {best})"
+                )
+        else:
+            lines.append("No pairwise correlations exceed |r| > 0.7 among admissible predictors.")
+    else:
+        lines.append("Fewer than two admissible predictors; collinearity clustering skipped.")
+    lines.append("")
+
+    return "\n".join(lines)

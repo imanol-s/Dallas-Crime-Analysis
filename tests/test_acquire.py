@@ -409,7 +409,9 @@ $259,000
                 settings.raw_dir / "crime_records.csv", index=False
             )
 
-            with patch("dallas_crime.acquire.census.fetch_census_payload", return_value=census_payload):
+            with patch(
+                "dallas_crime.acquire.census.fetch_census_payload", return_value=census_payload
+            ):
                 output = fetch_census_zcta_data(settings)
 
             frame = pd.read_csv(output, dtype={"zip": str})
@@ -749,7 +751,10 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
 
             with (
                 patch("dallas_crime.acquire.housing.run_firecrawl_command", side_effect=fake_run),
-                patch("dallas_crime.acquire.housing.fetch_realtor_zip_inventory", return_value=inventory),
+                patch(
+                    "dallas_crime.acquire.housing.fetch_realtor_zip_inventory",
+                    return_value=inventory,
+                ),
                 patch(
                     "dallas_crime.acquire.housing.fetch_realtor_zip_history",
                     return_value=pd.DataFrame(columns=["zip"]),
@@ -825,16 +830,25 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
         ]
 
         with (
-            patch("dallas_crime.acquire.housing._download_remote_tabular_source", return_value=Path("/tmp/realtor_history.csv")),
+            patch(
+                "dallas_crime.acquire.housing._download_remote_tabular_source",
+                return_value=Path("/tmp/realtor_history.csv"),
+            ),
             patch("dallas_crime.acquire.housing.pd.read_csv", return_value=iter(chunks)),
         ):
             frame = fetch_realtor_zip_history(["75201"], chunksize=2)
 
         self.assertEqual(frame["zip"].tolist(), ["75201"])
         self.assertEqual(frame.loc[0, "realtor_hist_months_observed"], 2)
-        self.assertAlmostEqual(frame.loc[0, "realtor_hist_listing_price_12m_avg"], (500000 + 550000) / 2)
-        self.assertAlmostEqual(frame.loc[0, "realtor_hist_listing_price_12m_change"], (550000 / 500000) - 1)
-        self.assertAlmostEqual(frame.loc[0, "realtor_hist_active_listing_count_12m_avg"], (30 + 35) / 2)
+        self.assertAlmostEqual(
+            frame.loc[0, "realtor_hist_listing_price_12m_avg"], (500000 + 550000) / 2
+        )
+        self.assertAlmostEqual(
+            frame.loc[0, "realtor_hist_listing_price_12m_change"], (550000 / 500000) - 1
+        )
+        self.assertAlmostEqual(
+            frame.loc[0, "realtor_hist_active_listing_count_12m_avg"], (30 + 35) / 2
+        )
         self.assertEqual(frame.loc[0, "realtor_hist_quality_flag_12m_max"], 1)
 
     def test_fetch_realtor_zip_history_panel_filters_to_year_floor(self):
@@ -877,7 +891,10 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
         ]
 
         with (
-            patch("dallas_crime.acquire.housing._download_remote_tabular_source", return_value=Path("/tmp/realtor_history.csv")),
+            patch(
+                "dallas_crime.acquire.housing._download_remote_tabular_source",
+                return_value=Path("/tmp/realtor_history.csv"),
+            ),
             patch("dallas_crime.acquire.housing.pd.read_csv", return_value=iter(chunks)),
         ):
             frame = fetch_realtor_zip_history_panel(["75201"], year_floor=2000, chunksize=2)
@@ -898,7 +915,10 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
         )
 
         with (
-            patch("dallas_crime.acquire.housing._download_remote_tabular_source", return_value=Path("/tmp/fhfa.xlsx")),
+            patch(
+                "dallas_crime.acquire.housing._download_remote_tabular_source",
+                return_value=Path("/tmp/fhfa.xlsx"),
+            ),
             patch("dallas_crime.acquire.housing.pd.read_excel", return_value=workbook_rows),
         ):
             frame = fetch_fhfa_zip5_history(["75201"], year_floor=2000)
@@ -949,13 +969,22 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
             settings.ensure_directories()
 
             with (
-                patch("dallas_crime.acquire.housing.fetch_realtor_zip_history_panel", return_value=realtor_panel),
-                patch("dallas_crime.acquire.housing.fetch_fhfa_zip5_history", return_value=fhfa_panel),
+                patch(
+                    "dallas_crime.acquire.housing.fetch_realtor_zip_history_panel",
+                    return_value=realtor_panel,
+                ),
+                patch(
+                    "dallas_crime.acquire.housing.fetch_fhfa_zip5_history", return_value=fhfa_panel
+                ),
             ):
-                output = fetch_housing_history_dataset(settings, zip_codes=["75201"], year_floor=2000)
+                output = fetch_housing_history_dataset(
+                    settings, zip_codes=["75201"], year_floor=2000
+                )
 
             frame = pd.read_csv(output, dtype={"zip": str})
-            metadata = json.loads((settings.raw_dir / "housing_market_history.metadata.json").read_text())
+            metadata = json.loads(
+                (settings.raw_dir / "housing_market_history.metadata.json").read_text()
+            )
             self.assertEqual(len(frame), 2)
             self.assertEqual(metadata["min_year"], 2000)
             self.assertEqual(metadata["source_summary"]["fhfa_zip5"]["rows"], 1)
@@ -1114,7 +1143,6 @@ In January 2026, 75207 home prices were up 12.5% compared to last year, selling 
             )
 
         self.assertEqual(payload, {"data": []})
-
 
     # ── T1: utils.py tests ──────────────────────────────────────────────
 

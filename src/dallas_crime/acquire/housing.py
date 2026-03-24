@@ -16,7 +16,12 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from dallas_crime.acquire.utils import AcquisitionError, run_with_retry, utc_timestamp, write_json_artifact
+from dallas_crime.acquire.utils import (
+    AcquisitionError,
+    run_with_retry,
+    utc_timestamp,
+    write_json_artifact,
+)
 
 if TYPE_CHECKING:
     from dallas_crime.config import Settings
@@ -28,7 +33,9 @@ _DATE_PATTERN = re.compile(
     r"(\d{1,2}/\d{1,2}/\d{4}|[A-Z][a-z]+ \d{1,2}, \d{4}|[A-Z][a-z]+ \d{4})"
 )
 _CHANGE_PATTERN = re.compile(r"(-?\d+(?:\.\d+)?)%\s+(?:1-yr|over the past year)", re.IGNORECASE)
-_UP_DOWN_CHANGE_PATTERN = re.compile(r"\b(up|down)\s+(\d+(?:\.\d+)?)%\s+(?:since|compared to)\s+last year", re.IGNORECASE)
+_UP_DOWN_CHANGE_PATTERN = re.compile(
+    r"\b(up|down)\s+(\d+(?:\.\d+)?)%\s+(?:since|compared to)\s+last year", re.IGNORECASE
+)
 _YEAR_OVER_YEAR_PATTERN = re.compile(r"([+-]?\d+(?:\.\d+)?)%\s+year-over-year", re.IGNORECASE)
 _REDFIN_SALE_SENTENCE_PATTERN = re.compile(
     r"median sale price of a home in \d{5} was\s+(\$\s*[0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)",
@@ -221,7 +228,9 @@ def run_firecrawl_command(
     )
 
 
-def parse_firecrawl_search_results(payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def parse_firecrawl_search_results(
+    payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     """Normalize Firecrawl search output across common response shapes."""
 
     if isinstance(payload, Mapping):
@@ -248,7 +257,7 @@ def parse_firecrawl_search_results(payload: Mapping[str, Any] | Sequence[Mapping
 
 
 def normalize_firecrawl_documents(
-    payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]
+    payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
 ) -> pd.DataFrame:
     """Extract housing metrics from scraped Firecrawl documents."""
 
@@ -270,11 +279,7 @@ def normalize_firecrawl_documents(
         for doc in documents
     ]
     metric_keys = {"home_value", "median_rent", "annual_change_pct", "as_of_date"}
-    normalized = [
-        row
-        for row in rows
-        if any(row.get(metric) is not None for metric in metric_keys)
-    ]
+    normalized = [row for row in rows if any(row.get(metric) is not None for metric in metric_keys)]
     return pd.DataFrame.from_records(normalized)
 
 
@@ -357,15 +362,17 @@ def fetch_housing_dataset(settings: "Settings") -> str:
 
     records: list[dict[str, Any]] = []
     status_by_zip: dict[str, dict[str, Any]] = {
-        zip_code: {"zip": zip_code, "status": "pending", "records": 0}
-        for zip_code in zip_codes
+        zip_code: {"zip": zip_code, "status": "pending", "records": 0} for zip_code in zip_codes
     }
     records.extend(_collect_zillow_records(settings, zip_codes, status_by_zip))
 
     merged = _merge_housing_records(records)
     remaining_zips = _remaining_zip_codes(zip_codes, merged)
 
-    for source_name, builder in (("realtor", _build_realtor_market_url), ("redfin", _build_redfin_market_url)):
+    for source_name, builder in (
+        ("realtor", _build_realtor_market_url),
+        ("redfin", _build_redfin_market_url),
+    ):
         if not remaining_zips:
             break
         records.extend(
@@ -432,9 +439,17 @@ def fetch_housing_dataset(settings: "Settings") -> str:
     for zip_code in zip_codes:
         status = status_by_zip[zip_code]
         if zip_code in received_zips:
-            status_by_zip[zip_code] = {"zip": zip_code, "status": "ok", "records": int(record_counts.get(zip_code, 1))}
+            status_by_zip[zip_code] = {
+                "zip": zip_code,
+                "status": "ok",
+                "records": int(record_counts.get(zip_code, 1)),
+            }
         elif status.get("status") == "pending":
-            status_by_zip[zip_code] = {"zip": zip_code, "status": "no_metrics", "records": int(record_counts.get(zip_code, 0))}
+            status_by_zip[zip_code] = {
+                "zip": zip_code,
+                "status": "no_metrics",
+                "records": int(record_counts.get(zip_code, 0)),
+            }
     zip_status = [status_by_zip[zip_code] for zip_code in zip_codes]
     write_json_artifact(
         coverage_path,
@@ -488,23 +503,32 @@ def fetch_housing_dataset(settings: "Settings") -> str:
             "source_summary": {
                 "zillow": int((housing["source"] == "zillow").sum()) if not housing.empty else 0,
                 "realtor": int((housing["source"] == "realtor").sum()) if not housing.empty else 0,
-                "realtor_csv": int((housing["source"] == "realtor_csv").sum()) if not housing.empty else 0,
+                "realtor_csv": int((housing["source"] == "realtor_csv").sum())
+                if not housing.empty
+                else 0,
                 "redfin": int((housing["source"] == "redfin").sum()) if not housing.empty else 0,
             },
             "source_url_patterns": {name: url for name, url in _SOURCE_URLS.items()},
             "realtor_inventory": {
                 "source_url": _SOURCE_URLS["realtor_csv"],
-                "matched_zip_count": int(realtor_inventory["zip"].nunique()) if not realtor_inventory.empty else 0,
+                "matched_zip_count": int(realtor_inventory["zip"].nunique())
+                if not realtor_inventory.empty
+                else 0,
                 "latest_as_of_date": (
                     realtor_inventory["realtor_as_of_date"].max().date().isoformat()
-                    if not realtor_inventory.empty and realtor_inventory["realtor_as_of_date"].notna().any()
+                    if not realtor_inventory.empty
+                    and realtor_inventory["realtor_as_of_date"].notna().any()
                     else None
                 ),
                 "non_null_feature_counts": {
-                    "realtor_listing_price": int(realtor_inventory["realtor_listing_price"].notna().sum())
+                    "realtor_listing_price": int(
+                        realtor_inventory["realtor_listing_price"].notna().sum()
+                    )
                     if "realtor_listing_price" in realtor_inventory
                     else 0,
-                    "realtor_active_listing_count": int(realtor_inventory["realtor_active_listing_count"].notna().sum())
+                    "realtor_active_listing_count": int(
+                        realtor_inventory["realtor_active_listing_count"].notna().sum()
+                    )
                     if "realtor_active_listing_count" in realtor_inventory
                     else 0,
                     "realtor_median_days_on_market": int(
@@ -512,14 +536,18 @@ def fetch_housing_dataset(settings: "Settings") -> str:
                     )
                     if "realtor_median_days_on_market" in realtor_inventory
                     else 0,
-                    "realtor_pending_ratio": int(realtor_inventory["realtor_pending_ratio"].notna().sum())
+                    "realtor_pending_ratio": int(
+                        realtor_inventory["realtor_pending_ratio"].notna().sum()
+                    )
                     if "realtor_pending_ratio" in realtor_inventory
                     else 0,
                 },
             },
             "realtor_history": {
                 "source_url": _SOURCE_URLS["realtor_history"],
-                "matched_zip_count": int(realtor_history["zip"].nunique()) if not realtor_history.empty else 0,
+                "matched_zip_count": int(realtor_history["zip"].nunique())
+                if not realtor_history.empty
+                else 0,
                 "feature_non_null_counts": {
                     column: int(realtor_history[column].notna().sum())
                     for column in realtor_history.columns
@@ -531,25 +559,33 @@ def fetch_housing_dataset(settings: "Settings") -> str:
                     "name": "zillow",
                     "url_pattern": _SOURCE_URLS["zillow"],
                     "metric_label": _METRIC_LABELS["zillow"],
-                    "records_written": int((housing["source"] == "zillow").sum()) if not housing.empty else 0,
+                    "records_written": int((housing["source"] == "zillow").sum())
+                    if not housing.empty
+                    else 0,
                 },
                 {
                     "name": "realtor",
                     "url_pattern": _SOURCE_URLS["realtor"],
                     "metric_label": _METRIC_LABELS["realtor"],
-                    "records_written": int((housing["source"] == "realtor").sum()) if not housing.empty else 0,
+                    "records_written": int((housing["source"] == "realtor").sum())
+                    if not housing.empty
+                    else 0,
                 },
                 {
                     "name": "realtor_csv",
                     "url_pattern": _SOURCE_URLS["realtor_csv"],
                     "metric_label": _METRIC_LABELS["realtor_csv"],
-                    "records_written": int((housing["source"] == "realtor_csv").sum()) if not housing.empty else 0,
+                    "records_written": int((housing["source"] == "realtor_csv").sum())
+                    if not housing.empty
+                    else 0,
                 },
                 {
                     "name": "redfin",
                     "url_pattern": _SOURCE_URLS["redfin"],
                     "metric_label": _METRIC_LABELS["redfin"],
-                    "records_written": int((housing["source"] == "redfin").sum()) if not housing.empty else 0,
+                    "records_written": int((housing["source"] == "redfin").sum())
+                    if not housing.empty
+                    else 0,
                 },
             ],
             "coverage_artifact": str(coverage_path),
@@ -619,7 +655,9 @@ def fetch_realtor_zip_inventory(
     if frame.empty:
         return frame
 
-    frame["realtor_as_of_date"] = pd.to_datetime(frame["realtor_month_date_yyyymm"], format="%Y%m", errors="coerce")
+    frame["realtor_as_of_date"] = pd.to_datetime(
+        frame["realtor_month_date_yyyymm"], format="%Y%m", errors="coerce"
+    )
     numeric_columns = [
         "realtor_listing_price",
         "realtor_listing_price_yy",
@@ -631,7 +669,9 @@ def fetch_realtor_zip_inventory(
     ]
     for column in numeric_columns:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.sort_values(["zip", "realtor_as_of_date"]).drop_duplicates(subset=["zip"], keep="last")
+    frame = frame.sort_values(["zip", "realtor_as_of_date"]).drop_duplicates(
+        subset=["zip"], keep="last"
+    )
     return frame.reset_index(drop=True)
 
 
@@ -672,7 +712,9 @@ def fetch_realtor_zip_history(
     ]
     for column in numeric_columns:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.dropna(subset=["realtor_hist_as_of_date"]).sort_values(["zip", "realtor_hist_as_of_date"])
+    frame = frame.dropna(subset=["realtor_hist_as_of_date"]).sort_values(
+        ["zip", "realtor_hist_as_of_date"]
+    )
     return _summarize_realtor_history(frame)
 
 
@@ -703,7 +745,9 @@ def fetch_realtor_zip_history_panel(
         return pd.DataFrame(columns=["zip"])
 
     frame = pd.concat(filtered_chunks, ignore_index=True)
-    frame["period_start"] = pd.to_datetime(frame["realtor_hist_month_date_yyyymm"], format="%Y%m", errors="coerce")
+    frame["period_start"] = pd.to_datetime(
+        frame["realtor_hist_month_date_yyyymm"], format="%Y%m", errors="coerce"
+    )
     frame = frame.dropna(subset=["period_start"]).copy()
     frame = frame[
         frame["period_start"].dt.year.between(year_floor, year_ceiling, inclusive="both")
@@ -795,24 +839,38 @@ def fetch_fhfa_zip5_history(
     frame["period_year"] = pd.to_numeric(frame["period_year"], errors="coerce").astype("Int64")
     frame = frame[frame["zip"].isin(set(zip_codes))].copy()
     frame = frame[
-        frame["period_year"].notna() & frame["period_year"].between(year_floor, year_ceiling, inclusive="both")
+        frame["period_year"].notna()
+        & frame["period_year"].between(year_floor, year_ceiling, inclusive="both")
     ].copy()
     if frame.empty:
         return pd.DataFrame(columns=["zip"])
 
-    for column in ("fhfa_annual_change_pct", "fhfa_hpi", "fhfa_hpi_1990_base", "fhfa_hpi_2000_base"):
+    for column in (
+        "fhfa_annual_change_pct",
+        "fhfa_hpi",
+        "fhfa_hpi_1990_base",
+        "fhfa_hpi_2000_base",
+    ):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
-    frame["period_start"] = pd.to_datetime(frame["period_year"].astype(str) + "-01-01", errors="coerce")
-    frame["period_end"] = pd.to_datetime(frame["period_year"].astype(str) + "-12-31", errors="coerce")
+    frame["period_start"] = pd.to_datetime(
+        frame["period_year"].astype(str) + "-01-01", errors="coerce"
+    )
+    frame["period_end"] = pd.to_datetime(
+        frame["period_year"].astype(str) + "-12-31", errors="coerce"
+    )
     frame["period_month"] = pd.Series([pd.NA] * len(frame), index=frame.index, dtype="Int64")
     frame["frequency"] = "annual"
     frame["source"] = "fhfa_zip5"
     frame["source_url"] = _SOURCE_URLS["fhfa_zip5"]
     frame["metric_label"] = _METRIC_LABELS["fhfa_zip5"]
-    frame["price_signal_value"] = frame["fhfa_hpi_2000_base"].where(frame["fhfa_hpi_2000_base"].notna(), frame["fhfa_hpi"])
-    frame["price_signal_unit"] = frame["fhfa_hpi_2000_base"].notna().map(
-        lambda has_base: "index_2000_base" if has_base else "index_native"
+    frame["price_signal_value"] = frame["fhfa_hpi_2000_base"].where(
+        frame["fhfa_hpi_2000_base"].notna(), frame["fhfa_hpi"]
+    )
+    frame["price_signal_unit"] = (
+        frame["fhfa_hpi_2000_base"]
+        .notna()
+        .map(lambda has_base: "index_2000_base" if has_base else "index_native")
     )
 
     columns = [
@@ -844,7 +902,9 @@ def fetch_housing_history_dataset(
 ) -> str:
     """Build a historical housing panel that reaches back to the requested year floor."""
 
-    requested_zips = list(zip_codes) if zip_codes is not None else _load_requested_zip_codes(settings)
+    requested_zips = (
+        list(zip_codes) if zip_codes is not None else _load_requested_zip_codes(settings)
+    )
     print("[housing] building historical Realtor ZIP panel.", flush=True)
     realtor_panel = fetch_realtor_zip_history_panel(
         requested_zips,
@@ -865,7 +925,11 @@ def fetch_housing_history_dataset(
     )
 
     panels = [frame for frame in (realtor_panel, fhfa_panel) if not frame.empty]
-    history = pd.concat(panels, ignore_index=True, sort=False) if panels else pd.DataFrame(columns=["zip"])
+    history = (
+        pd.concat(panels, ignore_index=True, sort=False)
+        if panels
+        else pd.DataFrame(columns=["zip"])
+    )
     if history.empty:
         raise AcquisitionError(
             f"No historical housing records were available between {year_floor} and {year_ceiling} for the requested ZIPs."
@@ -880,8 +944,12 @@ def fetch_housing_history_dataset(
         coverage_by_source[str(source_name)] = {
             "rows": int(len(source_frame)),
             "zip_count": int(source_frame["zip"].nunique()),
-            "min_year": int(source_frame["period_year"].dropna().min()) if source_frame["period_year"].notna().any() else None,
-            "max_year": int(source_frame["period_year"].dropna().max()) if source_frame["period_year"].notna().any() else None,
+            "min_year": int(source_frame["period_year"].dropna().min())
+            if source_frame["period_year"].notna().any()
+            else None,
+            "max_year": int(source_frame["period_year"].dropna().max())
+            if source_frame["period_year"].notna().any()
+            else None,
         }
 
     metadata_path = settings.raw_dir / "housing_market_history.metadata.json"
@@ -895,8 +963,12 @@ def fetch_housing_history_dataset(
             "requested_zip_count": len(requested_zips),
             "row_count": int(len(history)),
             "zip_count": int(history["zip"].nunique()),
-            "min_year": int(history["period_year"].dropna().min()) if history["period_year"].notna().any() else None,
-            "max_year": int(history["period_year"].dropna().max()) if history["period_year"].notna().any() else None,
+            "min_year": int(history["period_year"].dropna().min())
+            if history["period_year"].notna().any()
+            else None,
+            "max_year": int(history["period_year"].dropna().max())
+            if history["period_year"].notna().any()
+            else None,
             "source_summary": coverage_by_source,
             "source_url_patterns": {
                 "realtor_history": _SOURCE_URLS["realtor_history"],
@@ -970,7 +1042,9 @@ def _read_realtor_history_chunks(
     return filtered_chunks
 
 
-def _load_local_realtor_history_summary(history_path: Path, zip_codes: Sequence[str]) -> pd.DataFrame:
+def _load_local_realtor_history_summary(
+    history_path: Path, zip_codes: Sequence[str]
+) -> pd.DataFrame:
     if not history_path.exists() or not zip_codes:
         return pd.DataFrame(columns=["zip"])
 
@@ -985,7 +1059,9 @@ def _load_local_realtor_history_summary(history_path: Path, zip_codes: Sequence[
         "realtor_hist_quality_flag",
     ]
     frame = pd.read_csv(history_path, usecols=usecols, dtype={"zip": str, "source": str})
-    frame = frame[(frame["source"] == "realtor_history") & (frame["zip"].isin(set(zip_codes)))].copy()
+    frame = frame[
+        (frame["source"] == "realtor_history") & (frame["zip"].isin(set(zip_codes)))
+    ].copy()
     if frame.empty:
         return pd.DataFrame(columns=["zip"])
 
@@ -1131,7 +1207,9 @@ def _filter_to_batch_zips(frame: pd.DataFrame, batch: Sequence[str]) -> pd.DataF
     zillow_mask = source_name == "zillow"
     non_zillow_mask = ~zillow_mask
 
-    frame.loc[zillow_mask, "zip"] = source_zip[zillow_mask].where(source_zip[zillow_mask].isin(batch_set))
+    frame.loc[zillow_mask, "zip"] = source_zip[zillow_mask].where(
+        source_zip[zillow_mask].isin(batch_set)
+    )
     frame.loc[non_zillow_mask, "zip"] = source_zip[non_zillow_mask].where(
         source_zip[non_zillow_mask].isin(batch_set),
         extracted_zip[non_zillow_mask],
@@ -1186,7 +1264,9 @@ def _merge_housing_records(records: Sequence[Mapping[str, Any]]) -> pd.DataFrame
 
     merged_rows: list[dict[str, Any]] = []
     for zip_code, group in frame.groupby("zip", sort=True):
-        ordered = group.sort_values(["_priority", "_as_of_date"], ascending=[True, False], na_position="last")
+        ordered = group.sort_values(
+            ["_priority", "_as_of_date"], ascending=[True, False], na_position="last"
+        )
         primary_candidates = ordered[ordered["home_value"].notna()]
         primary = primary_candidates.iloc[0] if not primary_candidates.empty else ordered.iloc[0]
 
@@ -1206,7 +1286,9 @@ def _merge_housing_records(records: Sequence[Mapping[str, Any]]) -> pd.DataFrame
     merged_frame = pd.DataFrame.from_records(merged_rows)
     if merged_frame.empty:
         return merged_frame
-    merged_frame = merged_frame.dropna(subset=["home_value"]).sort_values("zip").reset_index(drop=True)
+    merged_frame = (
+        merged_frame.dropna(subset=["home_value"]).sort_values("zip").reset_index(drop=True)
+    )
     return merged_frame
 
 
@@ -1323,8 +1405,16 @@ def _summarize_realtor_history(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for zip_code, group in recent.groupby("zip", sort=True):
         group = group.sort_values("realtor_hist_as_of_date")
-        first_price = group["realtor_hist_listing_price"].dropna().iloc[0] if group["realtor_hist_listing_price"].notna().any() else None
-        last_price = group["realtor_hist_listing_price"].dropna().iloc[-1] if group["realtor_hist_listing_price"].notna().any() else None
+        first_price = (
+            group["realtor_hist_listing_price"].dropna().iloc[0]
+            if group["realtor_hist_listing_price"].notna().any()
+            else None
+        )
+        last_price = (
+            group["realtor_hist_listing_price"].dropna().iloc[-1]
+            if group["realtor_hist_listing_price"].notna().any()
+            else None
+        )
         price_change = None
         if first_price not in (None, 0) and last_price is not None:
             price_change = (float(last_price) / float(first_price)) - 1
@@ -1335,8 +1425,12 @@ def _summarize_realtor_history(frame: pd.DataFrame) -> pd.DataFrame:
                 "realtor_hist_months_observed": int(group["realtor_hist_as_of_date"].nunique()),
                 "realtor_hist_listing_price_12m_avg": group["realtor_hist_listing_price"].mean(),
                 "realtor_hist_listing_price_12m_change": price_change,
-                "realtor_hist_active_listing_count_12m_avg": group["realtor_hist_active_listing_count"].mean(),
-                "realtor_hist_median_days_on_market_12m_avg": group["realtor_hist_median_days_on_market"].mean(),
+                "realtor_hist_active_listing_count_12m_avg": group[
+                    "realtor_hist_active_listing_count"
+                ].mean(),
+                "realtor_hist_median_days_on_market_12m_avg": group[
+                    "realtor_hist_median_days_on_market"
+                ].mean(),
                 "realtor_hist_pending_ratio_12m_avg": group["realtor_hist_pending_ratio"].mean(),
                 "realtor_hist_quality_flag_12m_max": group["realtor_hist_quality_flag"].max(),
             }
@@ -1426,7 +1520,9 @@ def _extract_zillow_metrics(text: str) -> dict[str, Any]:
 
 
 def _extract_redfin_metrics(text: str) -> dict[str, Any]:
-    sale_match = _REDFIN_SALE_SENTENCE_PATTERN.search(text) or _REDFIN_PRICE_SECTION_PATTERN.search(text)
+    sale_match = _REDFIN_SALE_SENTENCE_PATTERN.search(text) or _REDFIN_PRICE_SECTION_PATTERN.search(
+        text
+    )
     home_value = _extract_price(sale_match.group(1)) if sale_match else None
     change_match = _UP_DOWN_CHANGE_PATTERN.search(text) or _YEAR_OVER_YEAR_PATTERN.search(text)
     annual_change_pct = _coerce_percent_change(change_match)

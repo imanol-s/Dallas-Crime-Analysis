@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from dallas_crime.acquire.utils import utc_timestamp, write_json_artifact
+
+if TYPE_CHECKING:
+    from dallas_crime.config import Settings
 from dallas_crime.acquire.census import (
     fetch_census_zcta_data,
     fetch_census_zcta_snapshot_data,
@@ -15,7 +20,7 @@ from dallas_crime.acquire.housing import fetch_housing_dataset
 from dallas_crime.acquire.sidecars import fetch_optional_zip_sidecars
 
 
-def run_acquire(settings) -> dict[str, str]:
+def run_acquire(settings: "Settings") -> dict[str, str]:
     """Fetch and persist all raw datasets used by the project."""
 
     print("[acquire] Starting Dallas crime acquisition...", flush=True)

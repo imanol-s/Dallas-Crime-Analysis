@@ -27,7 +27,9 @@ def _echo_settings(settings: Settings) -> None:
         typer.echo(f"  {key}: {value}")
 
 
-def _run_hook(module_name: str, function_name: str, settings: Settings) -> dict[str, Path] | Path | None:
+def _run_hook(
+    module_name: str, function_name: str, settings: Settings
+) -> dict[str, Path] | Path | None:
     try:
         module = import_module(module_name)
     except ModuleNotFoundError:
@@ -39,9 +41,7 @@ def _run_hook(module_name: str, function_name: str, settings: Settings) -> dict[
 
     handler = getattr(module, function_name, None)
     if handler is None:
-        typer.echo(
-            f"Scaffold only: {module_name}.{function_name} is not implemented yet."
-        )
+        typer.echo(f"Scaffold only: {module_name}.{function_name} is not implemented yet.")
         return None
     return handler(settings)
 
